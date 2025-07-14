@@ -1,0 +1,7 @@
+# static 폴더와 그 안의 모든 내용 무시
+static/
+
+# captured_images 폴더 안의 모든 파일(*)은 무시하지만,
+captured_images/*
+# .gitkeep 파일은 예외로 두어 폴더 구조는 유지
+!captured_images/.gitkeep

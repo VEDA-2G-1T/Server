@@ -1,0 +1,3 @@
+/home/iam/pi_server/build/CMakeFiles/edit_cache.dir
+/home/iam/pi_server/build/CMakeFiles/rebuild_cache.dir
+/home/iam/pi_server/build/CMakeFiles/pi_server.dir
