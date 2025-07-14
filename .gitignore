@@ -5,3 +5,6 @@ static/
 captured_images/*
 # .gitkeep 파일은 예외로 두어 폴더 구조는 유지
 !captured_images/.gitkeep
+
+build/*
+!build/.gitkeep
