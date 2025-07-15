@@ -8,3 +8,6 @@ captured_images/*
 
 build/*
 !build/.gitkeep
+
+data/*
+!data/.gitkeep
