@@ -13,6 +13,7 @@ find_package(SQLite3 REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFTW3 REQUIRED fftw3)
+pkg_check_modules(ALSA REQUIRED alsa)
 
 # --- 외부 라이브러리 절대 경로 설정 ---
 set(ONNXRUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/onnxruntime")
@@ -31,6 +32,7 @@ set(SOURCES
     src/SerialCommunicator.cpp
     src/STM32Protocol.cpp
     src/AnomalyDetector.cpp
+    src/AudioNotifier.cpp  
     ${YOLO_SOURCES}
 )
 
@@ -47,6 +49,7 @@ target_include_directories(pi_server PRIVATE
     ${CROW_INCLUDE_DIR}
     ${JSON_INCLUDE_DIR}
     ${FFTW3_INCLUDE_DIRS}
+    ${ALSA_INCLUDE_DIRS}
 )
 
 # --- 라이브러리 링크 ---
@@ -57,6 +60,7 @@ target_link_libraries(pi_server PRIVATE
     ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so
     -lpthread
     ${FFTW3_LIBRARIES}
+    ${ALSA_LIBRARIES}
 )
 
 # --- 컴파일러 플래그 (선택 사항) ---
