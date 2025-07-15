@@ -32,6 +32,19 @@ int main() {
     ApiService apiService(app, streamProcessor, dbManager);
     apiService.setupRoutes();
 
+    // 콜백 함수 등록 (이벤트 연결)
+    streamProcessor.onAnomalyStatusChanged([&apiService](bool isAnomaly) {
+        apiService.broadcastAnomalyStatus(isAnomaly);
+    });
+
+    streamProcessor.onNewDetection([&apiService](const DetectionData& data) {
+        apiService.broadcastNewDetection(data);
+    });
+
+    streamProcessor.onNewBlur([&apiService](const PersonCountData& data) {
+        apiService.broadcastNewBlur(data);
+    });
+
     // 3. API 서버를 백그라운드 스레드에서 실행
     std::thread server_thread([&app](){
         std::cout << "C++ 백엔드 서버가 9000번 포트에서 시작됩니다..." << std::endl;
