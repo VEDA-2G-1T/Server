@@ -6,6 +6,7 @@
 #include <atomic>
 #include <map>
 #include <cstdio> // FILE*
+#include <functional>
 
 // 클래스 전방 선언 (순환 참조 방지)
 class Detector;
@@ -14,6 +15,8 @@ class DatabaseManager;
 class SerialCommunicator;
 class AnomalyDetector;
 struct DetectionResult;
+struct DetectionData;
+struct PersonCountData;
 
 class StreamProcessor {
 public:
@@ -25,6 +28,11 @@ public:
     void run();
 
     bool isAnomalyDetected() const;
+
+    // 웹소켓 콜백 함수 등록을 위한 함수
+    void onAnomalyStatusChanged(std::function<void(bool)> callback);
+    void onNewDetection(std::function<void(const DetectionData&)> callback);
+    void onNewBlur(std::function<void(const PersonCountData&)> callback);
 
 private:
     // 초기화 헬퍼 함수
@@ -73,4 +81,9 @@ private:
     std::atomic<bool> anomaly_detected_{false};
     time_t last_anomaly_check_ = 0;
     constexpr static int ANOMALY_CHECK_INTERVAL = 1;  // 1초마다 체크
+
+    // 웹소켓 콜백 함수들을 저장할 멤버 변수 
+    std::function<void(bool)> anomaly_callback_;
+    std::function<void(const DetectionData&)> detection_callback_;
+    std::function<void(const PersonCountData&)> blur_callback_;
 };

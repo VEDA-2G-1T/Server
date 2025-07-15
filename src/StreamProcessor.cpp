@@ -77,6 +77,11 @@ void StreamProcessor::run() {
     }
 }
 
+// 콜백 등록 함수
+void StreamProcessor::onAnomalyStatusChanged(std::function<void(bool)> callback) { anomaly_callback_ = callback; }
+void StreamProcessor::onNewDetection(std::function<void(const DetectionData&)> callback) { detection_callback_ = callback; }
+void StreamProcessor::onNewBlur(std::function<void(const PersonCountData&)> callback) { blur_callback_ = callback; }
+
 void StreamProcessor::handle_anomaly_detection() {
     // 1초마다 이상탐지 상태 확인
     time_t current_time = time(0);
@@ -88,6 +93,11 @@ void StreamProcessor::handle_anomaly_detection() {
             // 이상탐지 상태가 변경되었을 때만 STM32에 신호 전송
             if (current_anomaly != anomaly_detected_.load()) {
                 anomaly_detected_ = current_anomaly;
+
+                // 등록된 콜백이 있으면 호출 
+                if (anomaly_callback_) {
+                anomaly_callback_(current_anomaly);
+                }
                 
                 if (serial_comm_ && serial_comm_->isOpen()) {
                 auto frame_to_send = STM32Protocol::buildToggleFrame();
@@ -167,7 +177,7 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
                 // 사각형 그리기
                 cv::rectangle(display_frame, res.box, color, 2);
 
-                // ★★★★★[복원] 텍스트 그리기 로직 전체 복원 ★★★★★
+                // 텍스트 그리기 로직 
                 std::stringstream label_ss;
                 label_ss << class_name << " " << std::fixed << std::setprecision(2) << res.confidence;
                 std::string label = label_ss.str();
@@ -186,21 +196,32 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
                               color, -1);
                 cv::putText(display_frame, label, cv::Point(res.box.x, text_y - 5), 
                             cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
-                // ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
             }
         }
 
         // 3-3. 박스와 텍스트가 모두 그려진 display_frame을 DB에 저장
         if (time(0) - last_save_time_ >= 3) {
-            db_manager_.saveDetectionLog(camera_id_, results, display_frame, *detector_);
+            auto saved_data = db_manager_.saveDetectionLog(camera_id_, results, display_frame, *detector_);
+
+            // 등록된 콜백이 있으면 호출 
+            if (detection_callback_ && saved_data.has_value()) {
+                detection_callback_(saved_data.value());
+            }
+
             last_save_time_ = time(0);
         }
 
     } else if (active_mode == "blur" && segmenter_) {
         SegmentationResult seg_result = segmenter_->process_frame(display_frame);
         if (time(0) - last_save_time_ >= 3) {
-            db_manager_.saveBlurLog(camera_id_, seg_result.person_count);
+            auto saved_data = db_manager_.saveBlurLog(camera_id_, seg_result.person_count);
             std::cout << "DB 저장 호출: 카메라 " << camera_id_ << ", " << seg_result.person_count << "명" << std::endl;
+
+            // 등록된 콜백이 있으면 호출 
+            if (blur_callback_ && saved_data.has_value()) {
+            blur_callback_(saved_data.value());
+            }
+
             last_save_time_ = time(0);
         }
 
