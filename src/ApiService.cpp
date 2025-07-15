@@ -57,34 +57,6 @@ void ApiService::setupRoutes() {
         }
     });
 
-    CROW_ROUTE(app_, "/api/blur")([this] {
-        std::vector<PersonCountData> results;
-        nlohmann::ordered_json response_json;
-
-        if (dbManager_.getPersonCounts(results)) {
-            nlohmann::ordered_json counts_array = nlohmann::ordered_json::array();
-            for (const auto& data : results) {
-                nlohmann::ordered_json count_obj;
-                count_obj["camera_id"] = data.camera_id;
-                count_obj["timestamp"] = data.timestamp;
-                count_obj["count"] = data.count;
-                counts_array.push_back(count_obj);
-            }
-            response_json["status"] = "success";
-            response_json["person_counts"] = counts_array;
-            
-            crow::response res(response_json.dump());
-            res.set_header("Content-Type", "application/json");
-            return res;
-        } else {
-            response_json["status"] = "error";
-            response_json["message"] = "Failed to fetch person counts from database.";
-            crow::response res(500, response_json.dump());
-            res.set_header("Content-Type", "application/json");
-            return res;
-        }
-    });
-
     // /api/mode 라우트
     CROW_ROUTE(app_, "/api/mode").methods("POST"_method)
     ([this](const crow::request& req){
@@ -111,20 +83,6 @@ void ApiService::setupRoutes() {
         return crow::response(400, "{\"status\":\"error\", \"message\":\"유효하지 않은 모드입니다.\"}");
     });
 
-    /*
-    CROW_ROUTE(app_, "/api/anomaly/status")([this] {
-        // StreamProcessor로부터 현재 이상 탐지 상태를 가져옵니다.
-        // anomaly_detected_가 std::atomic<bool>이므로 .load()로 안전하게 읽습니다.
-        bool is_anomaly = processor_.isAnomalyDetected(); // 혹은 직접 접근: processor_.anomaly_detected_.load()
-
-        nlohmann::ordered_json response_json;
-        response_json["status"] = is_anomaly ? "detected" : "cleared";
-
-        crow::response res(response_json.dump());
-        res.set_header("Content-Type", "application/json");
-        return res;
-    });
-    */
 }
 
 // 웹소켓 broadcast
