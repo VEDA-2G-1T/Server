@@ -10,6 +10,19 @@ ApiService::ApiService(crow::SimpleApp& app, StreamProcessor& processor, Databas
     : app_(app), processor_(processor), dbManager_(dbManager) {}
 
 void ApiService::setupRoutes() {
+    // 웹소켓 라우트
+    CROW_WEBSOCKET_ROUTE(app_, "/ws")
+        .onopen([this](crow::websocket::connection& conn) {
+            std::lock_guard<std::mutex> _(mtx_);
+            ws_users_.insert(&conn);
+        })
+        .onclose([this](crow::websocket::connection& conn, const std::string& reason, uint16_t code) {
+        std::lock_guard<std::mutex> _(mtx_);
+        ws_users_.erase(&conn);
+        CROW_LOG_INFO << "Websocket connection closed: " << &conn;
+        })
+        .onmessage([](crow::websocket::connection& /*conn*/, const std::string& data, bool is_binary){
+        });
     
     CROW_ROUTE(app_, "/api/detections")([this] {
         std::vector<DetectionData> results;
@@ -72,7 +85,7 @@ void ApiService::setupRoutes() {
         }
     });
 
-    // /api/mode 라우트는 이전과 동일
+    // /api/mode 라우트
     CROW_ROUTE(app_, "/api/mode").methods("POST"_method)
     ([this](const crow::request& req){
         auto data = nlohmann::json::parse(req.body);
@@ -98,6 +111,7 @@ void ApiService::setupRoutes() {
         return crow::response(400, "{\"status\":\"error\", \"message\":\"유효하지 않은 모드입니다.\"}");
     });
 
+    /*
     CROW_ROUTE(app_, "/api/anomaly/status")([this] {
         // StreamProcessor로부터 현재 이상 탐지 상태를 가져옵니다.
         // anomaly_detected_가 std::atomic<bool>이므로 .load()로 안전하게 읽습니다.
@@ -110,4 +124,53 @@ void ApiService::setupRoutes() {
         res.set_header("Content-Type", "application/json");
         return res;
     });
+    */
+}
+
+// 웹소켓 broadcast
+void ApiService::broadcastAnomalyStatus(bool isAnomaly) {
+    nlohmann::json msg;
+    msg["type"] = "anomaly_status"; // 메시지 종류 식별자
+    msg["data"]["status"] = isAnomaly ? "detected" : "cleared";
+
+    time_t now = time(0);
+    char buf[80];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    msg["data"]["timestamp"] = std::string(buf);
+
+    std::lock_guard<std::mutex> _(mtx_);
+    for (auto user : ws_users_) user->send_text(msg.dump());
+}
+
+void ApiService::broadcastNewDetection(const DetectionData& data) {
+    nlohmann::json msg;
+    msg["type"] = "new_detection"; // 메시지 종류 식별자
+
+    nlohmann::json obj;
+    obj["camera_id"] = data.camera_id;
+    obj["timestamp"] = data.timestamp;
+    obj["all_objects"] = data.all_objects;
+    obj["person_count"] = data.person_count;
+    obj["helmet_count"] = data.helmet_count;
+    obj["safety_vest_count"] = data.safety_vest_count;
+    obj["avg_confidence"] = data.avg_confidence;
+    obj["image_path"] = data.image_path;
+    msg["data"] = obj;
+
+    std::lock_guard<std::mutex> _(mtx_);
+    for (auto user : ws_users_) user->send_text(msg.dump());
+}
+
+void ApiService::broadcastNewBlur(const PersonCountData& data) {
+    nlohmann::json msg;
+    msg["type"] = "new_blur"; // 메시지 종류 식별자
+
+    nlohmann::json obj;
+    obj["camera_id"] = data.camera_id;
+    obj["timestamp"] = data.timestamp;
+    obj["count"] = data.count;
+    msg["data"] = obj;
+
+    std::lock_guard<std::mutex> _(mtx_);
+    for (auto user : ws_users_) user->send_text(msg.dump());
 }
