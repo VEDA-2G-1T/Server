@@ -7,6 +7,7 @@
 #include <map>
 #include <cstdio> // FILE*
 #include <functional>
+#include "AudioNotifier.h"
 
 // 클래스 전방 선언 (순환 참조 방지)
 class Detector;
@@ -86,4 +87,7 @@ private:
     std::function<void(bool)> anomaly_callback_;
     std::function<void(const DetectionData&)> detection_callback_;
     std::function<void(const PersonCountData&)> blur_callback_;
+
+    // PPE detect시 스피커 송출 관련 멤버 변수
+    AudioNotifier audio_notifier; 
 };

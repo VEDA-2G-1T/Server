@@ -154,6 +154,25 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
 
         bool is_unsafe = (helmet_count < person_count || vest_count < person_count);
 
+        // 음성 안내
+        if (is_unsafe) {
+            if (!audio_notifier.isPlaying()) {
+            bool only_helmet_missing = (helmet_count < person_count) && (vest_count >= person_count);
+            bool only_vest_missing = (vest_count < person_count) && (helmet_count >= person_count);
+
+            if (only_helmet_missing) {
+                audio_notifier.play("../sounds/helmet_ment.wav");
+                std::cout << "[INFO] Playing sound: helmet_ment.wav" << std::endl;
+            } else if (only_vest_missing) {
+                audio_notifier.play("../sounds/vest_ment.wav");
+                std::cout << "[INFO] Playing sound: vest_ment.wav" << std::endl;
+            } else {
+                audio_notifier.play("../sounds/safety_ment.wav");
+                std::cout << "[INFO] Playing sound: safety_ment.wav" << std::endl;
+            }
+            }
+        }
+
         // 3-3. 위험할 때만 STM32에 신호 전송 명령
         if (is_unsafe && serial_comm_ && serial_comm_->isOpen()) {
             auto frame_to_send = STM32Protocol::buildToggleFrame();
