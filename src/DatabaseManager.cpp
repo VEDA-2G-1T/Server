@@ -47,8 +47,8 @@ std::string DatabaseManager::get_current_timestamp() {
 }
 
 // ★ 수정: 전역 변수 대신 멤버 변수를 사용하도록 전체 로직 구현
-void DatabaseManager::saveDetectionLog(int camera_id, const std::vector<DetectionResult>& results, const cv::Mat& frame, Detector& detector) {
-    if (results.empty()) return;
+std::optional<DetectionData> DatabaseManager::saveDetectionLog(int camera_id, const std::vector<DetectionResult>& results, const cv::Mat& frame, Detector& detector) {
+    if (results.empty()) return std::nullopt;
 
     int person_count = 0, helmet_count = 0, safety_vest_count = 0;
     double total_confidence = 0;
@@ -82,43 +82,70 @@ void DatabaseManager::saveDetectionLog(int camera_id, const std::vector<Detectio
     double avg_confidence = results.empty() ? 0.0 : total_confidence / results.size();
 
     sqlite3* db;
-    if (sqlite3_open(detection_db_path_.c_str(), &db) == SQLITE_OK) {
-        sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
-        const char* sql = "INSERT INTO detections (camera_id, timestamp, all_objects, person_count, helmet_count, safety_vest_count, avg_confidence, image_path) VALUES(?,?,?,?,?,?,?,?);";
-        sqlite3_stmt* stmt;
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
-            sqlite3_bind_int(stmt, 1, camera_id); 
-            sqlite3_bind_text(stmt, 2, timestamp_str.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(stmt, 3, all_objects_str.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int(stmt, 4, person_count);
-            sqlite3_bind_int(stmt, 5, helmet_count);
-            sqlite3_bind_int(stmt, 6, safety_vest_count);
-            sqlite3_bind_double(stmt, 7, avg_confidence);
-            sqlite3_bind_text(stmt, 8, image_path.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_step(stmt);
-        }
-        sqlite3_finalize(stmt);
-        sqlite3_close(db);
+
+    if (sqlite3_open(detection_db_path_.c_str(), &db) != SQLITE_OK) {
+        return std::nullopt; // DB 열기 실패 시 빈 optional 반환
     }
+
+    sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
+    const char* sql = "INSERT INTO detections (camera_id, timestamp, all_objects, person_count, helmet_count, safety_vest_count, avg_confidence, image_path) VALUES(?,?,?,?,?,?,?,?);";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, camera_id); 
+        sqlite3_bind_text(stmt, 2, timestamp_str.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, all_objects_str.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 4, person_count);
+        sqlite3_bind_int(stmt, 5, helmet_count);
+        sqlite3_bind_int(stmt, 6, safety_vest_count);
+        sqlite3_bind_double(stmt, 7, avg_confidence);
+        sqlite3_bind_text(stmt, 8, image_path.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    DetectionData data;
+    data.camera_id = camera_id;
+    data.timestamp = timestamp_str;
+    data.all_objects = all_objects_str;
+    data.person_count = person_count;
+    data.helmet_count = helmet_count;
+    data.safety_vest_count = safety_vest_count;
+    data.avg_confidence = avg_confidence;
+    data.image_path = image_path;
+
+    return data;
 }
 
 // ★ 수정: 전역 변수 대신 멤버 변수를 사용하도록 전체 로직 구현
-void DatabaseManager::saveBlurLog(int camera_id, int person_count) {
+std::optional<PersonCountData> DatabaseManager::saveBlurLog(int camera_id, int person_count) {
     sqlite3* db;
-    if (sqlite3_open(blur_db_path_.c_str(), &db) == SQLITE_OK) {
-        sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
-        const char* sql = "INSERT INTO person_counts (camera_id, timestamp, count) VALUES(?,?,?);";
-        sqlite3_stmt* stmt;
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
-            std::string timestamp_str = get_current_timestamp();
-            sqlite3_bind_int(stmt, 1, camera_id); 
-            sqlite3_bind_text(stmt, 2, timestamp_str.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int(stmt, 3, person_count);
-            sqlite3_step(stmt);
-        }
-        sqlite3_finalize(stmt);
-        sqlite3_close(db);
+    if (sqlite3_open(blur_db_path_.c_str(), &db) != SQLITE_OK) {
+        return std::nullopt; // DB 열기 실패 시 빈 optional 반환
     }
+
+    std::string timestamp_str = get_current_timestamp(); 
+
+    sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
+    const char* sql = "INSERT INTO person_counts (camera_id, timestamp, count) VALUES(?,?,?);";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, camera_id);
+        sqlite3_bind_text(stmt, 2, timestamp_str.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 3, person_count);
+        sqlite3_step(stmt);
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    PersonCountData data;
+    data.camera_id = camera_id;
+    data.timestamp = timestamp_str;
+    data.count = person_count;
+
+    return data;
 }
 
 bool DatabaseManager::getAllDetections(std::vector<DetectionData>& detections) {
