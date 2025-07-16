@@ -11,3 +11,6 @@ build/*
 
 data/*
 !data/.gitkeep
+
+# SSL Certificate Files
+*.pem
