@@ -25,7 +25,7 @@ int main() {
     signal(SIGTERM, signal_handler);
 
     // 2. 핵심 컴포넌트 생성
-    DatabaseManager dbManager("../data/detections.db", "../data/blur.db", "../captured_images");
+    DatabaseManager dbManager("data/detections.db", "data/blur.db", "captured_images");
     StreamProcessor streamProcessor(dbManager);
     
     crow::SimpleApp app;
@@ -49,7 +49,7 @@ int main() {
     std::thread server_thread([&app](){
         std::cout << "C++ 백엔드 서버가 8443번 포트에서 시작됩니다..." << std::endl;
         app.port(8443)
-        .ssl_file("../cert.pem", "../key.pem")  // OpenSSL 적용
+        .ssl_file("cert.pem", "key.pem")  // OpenSSL 적용
         .multithreaded()
         .run();
     });

@@ -161,13 +161,13 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
             bool only_vest_missing = (vest_count < person_count) && (helmet_count >= person_count);
 
             if (only_helmet_missing) {
-                audio_notifier.play("../sounds/helmet_ment.wav");
+                audio_notifier.play("sounds/helmet_ment.wav");
                 std::cout << "[INFO] Playing sound: helmet_ment.wav" << std::endl;
             } else if (only_vest_missing) {
-                audio_notifier.play("../sounds/vest_ment.wav");
+                audio_notifier.play("sounds/vest_ment.wav");
                 std::cout << "[INFO] Playing sound: vest_ment.wav" << std::endl;
             } else {
-                audio_notifier.play("../sounds/safety_ment.wav");
+                audio_notifier.play("sounds/safety_ment.wav");
                 std::cout << "[INFO] Playing sound: safety_ment.wav" << std::endl;
             }
             }

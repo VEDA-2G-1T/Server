@@ -71,8 +71,8 @@ private:
     std::unique_ptr<Detector> detector_;
     std::unique_ptr<Segmenter> segmenter_;
     std::string last_loaded_mode_ = "none";
-    std::string detection_model_path_ = "../models/best_test.onnx";
-    std::string segmentation_model_path_ = "../models/yolo11n-seg.onnx";
+    std::string detection_model_path_ = "models/best_test.onnx";
+    std::string segmentation_model_path_ = "models/yolo11n-seg.onnx";
 
     // 그리기 및 DB 저장 주기
     std::map<std::string, cv::Scalar> color_map_;
