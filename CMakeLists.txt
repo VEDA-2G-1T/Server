@@ -14,6 +14,7 @@ find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFTW3 REQUIRED fftw3)
 pkg_check_modules(ALSA REQUIRED alsa)
+find_package(OpenSSL REQUIRED)
 
 # --- 외부 라이브러리 절대 경로 설정 ---
 set(ONNXRUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/onnxruntime")
@@ -39,6 +40,8 @@ set(SOURCES
 # --- 실행 파일 ---
 add_executable(pi_server ${SOURCES})
 
+target_compile_definitions(pi_server PRIVATE CROW_ENABLE_SSL)
+
 # --- 인클루드 디렉토리 ---
 target_include_directories(pi_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -61,6 +64,8 @@ target_link_libraries(pi_server PRIVATE
     -lpthread
     ${FFTW3_LIBRARIES}
     ${ALSA_LIBRARIES}
+    OpenSSL::SSL     
+    OpenSSL::Crypto   
 )
 
 # --- 컴파일러 플래그 (선택 사항) ---

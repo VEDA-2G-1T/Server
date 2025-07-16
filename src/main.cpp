@@ -47,8 +47,11 @@ int main() {
 
     // 3. API 서버를 백그라운드 스레드에서 실행
     std::thread server_thread([&app](){
-        std::cout << "C++ 백엔드 서버가 9000번 포트에서 시작됩니다..." << std::endl;
-        app.port(9000).multithreaded().run();
+        std::cout << "C++ 백엔드 서버가 8443번 포트에서 시작됩니다..." << std::endl;
+        app.port(8443)
+        .ssl_file("../cert.pem", "../key.pem")  // OpenSSL 적용
+        .multithreaded()
+        .run();
     });
 
     // 4. 메인 스레드에서 영상 처리 루프 실행
