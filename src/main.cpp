@@ -2,14 +2,15 @@
 #include "DatabaseManager.h"
 #include "ApiService.h"
 #include "SharedState.h"
-#include "StreamProcessor.h" // 새로 만든 클래스 포함
+#include "StreamProcessor.h" 
+#include "SerialCommunicator.h"
 
 #include <thread>
 #include <csignal>
 #include <iostream>
 
 // 전역 변수 선언
-std::string g_current_mode = "blur";
+std::string g_current_mode = "detect";
 std::mutex g_mode_mutex;
 std::atomic<bool> g_keep_running(true);
 
@@ -27,9 +28,10 @@ int main() {
     // 2. 핵심 컴포넌트 생성
     DatabaseManager dbManager("data/detections.db", "data/blur.db", "captured_images");
     StreamProcessor streamProcessor(dbManager);
+    SerialCommunicator& serial_comm = streamProcessor.getSerialCommunicator();
     
     crow::SimpleApp app;
-    ApiService apiService(app, streamProcessor, dbManager);
+    ApiService apiService(app, streamProcessor, dbManager, serial_comm);
     apiService.setupRoutes();
 
     // 콜백 함수 등록 (이벤트 연결)
