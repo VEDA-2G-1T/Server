@@ -29,6 +29,7 @@ public:
     void run();
 
     bool isAnomalyDetected() const;
+    SerialCommunicator& getSerialCommunicator();
 
     // 웹소켓 콜백 함수 등록을 위한 함수
     void onAnomalyStatusChanged(std::function<void(bool)> callback);

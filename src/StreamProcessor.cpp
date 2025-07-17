@@ -100,7 +100,9 @@ void StreamProcessor::handle_anomaly_detection() {
                 }
                 
                 if (serial_comm_ && serial_comm_->isOpen()) {
-                auto frame_to_send = STM32Protocol::buildToggleFrame();
+                uint8_t seq = serial_comm_->getNextSeq();
+                auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
+
                 uint8_t seq_sent = frame_to_send[3];
                 std::string log_msg = "Sent TOGGLE (seq=" + std::to_string(seq_sent) + ")";
                 
@@ -175,7 +177,8 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
 
         // 3-3. 위험할 때만 STM32에 신호 전송 명령
         if (is_unsafe && serial_comm_ && serial_comm_->isOpen()) {
-            auto frame_to_send = STM32Protocol::buildToggleFrame();
+            uint8_t seq = serial_comm_->getNextSeq();
+            auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
             uint8_t seq_sent = frame_to_send[3];
             std::string log_msg = "Sent TOGGLE (seq=" + std::to_string(seq_sent) + ")";
             
@@ -330,4 +333,9 @@ std::string StreamProcessor::gstreamer_pipeline() {
            "videoconvert ! "
            "video/x-raw, format=BGR ! "
            "appsink sync=false max-buffers=1 drop=true";
+}
+
+SerialCommunicator& StreamProcessor::getSerialCommunicator() {
+    // unique_ptr이 소유한 객체의 참조를 반환
+    return *serial_comm_;
 }
