@@ -4,10 +4,15 @@
 #include "SharedState.h" 
 #include "DetectionData.h" 
 #include "StreamProcessor.h" 
+#include "SerialCommunicator.h" 
+#include "STM32Protocol.h"     
 
 // 생성자는 이전과 동일하게 유지합니다.
-ApiService::ApiService(crow::SimpleApp& app, StreamProcessor& processor, DatabaseManager& dbManager)
-    : app_(app), processor_(processor), dbManager_(dbManager) {}
+//ApiService::ApiService(crow::SimpleApp& app, StreamProcessor& processor, DatabaseManager& dbManager)
+//    : app_(app), processor_(processor), dbManager_(dbManager) {}
+
+ApiService::ApiService(crow::SimpleApp& app, StreamProcessor& processor, DatabaseManager& dbManager, SerialCommunicator& serial_comm)
+    : app_(app), processor_(processor), dbManager_(dbManager), serial_comm_(serial_comm) {}
 
 void ApiService::setupRoutes() {
     // 웹소켓 라우트
@@ -21,7 +26,15 @@ void ApiService::setupRoutes() {
         ws_users_.erase(&conn);
         CROW_LOG_INFO << "Websocket connection closed: " << &conn;
         })
-        .onmessage([](crow::websocket::connection& /*conn*/, const std::string& data, bool is_binary){
+        .onmessage([this](crow::websocket::connection& conn, const std::string& data, bool is_binary) {
+            try {
+                auto json_req = nlohmann::json::parse(data);
+                if (json_req.value("type", "") == "request_stm_status") {
+                    handleSTM32StatusCheck();
+                }
+            } catch (const std::exception& e) {
+                CROW_LOG_ERROR << "Invalid WebSocket message: " << e.what();
+            }
         });
     
     CROW_ROUTE(app_, "/api/detections")([this] {
@@ -131,4 +144,31 @@ void ApiService::broadcastNewBlur(const PersonCountData& data) {
 
     std::lock_guard<std::mutex> _(mtx_);
     for (auto user : ws_users_) user->send_text(msg.dump());
+}
+
+void ApiService::handleSTM32StatusCheck() {
+    std::cout << "[DEBUG] Received 'request_stm_status'. Attempting to check STM32..." << std::endl;
+    uint8_t seq = serial_comm_.getNextSeq();
+    
+    auto frame_to_send = STM32Protocol::buildCheckFrame(seq);
+    
+    std::string log_msg = "[TX] Sent CHK (seq=" + std::to_string(seq) + ")";
+    auto response_frame = serial_comm_.sendAndReceive(frame_to_send, log_msg);
+
+    if (response_frame) {
+        auto status_data = STM32Protocol::parseStatusData(*response_frame);
+        if (status_data) {
+            nlohmann::json msg;
+            msg["type"] = "stm_status_update";
+            msg["data"]["led_on"] = status_data->is_led_on;
+            msg["data"]["buzzer_on"] = status_data->is_buzzer_on;
+            msg["data"]["light"] = status_data->light_value;
+            msg["data"]["temperature"] = status_data->temperature;
+            
+            std::lock_guard<std::mutex> _(mtx_);
+            for (auto user : ws_users_) {
+                user->send_text(msg.dump());
+            }
+        }
+    }
 }

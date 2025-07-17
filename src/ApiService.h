@@ -6,12 +6,14 @@
 // 전방 선언
 class StreamProcessor;
 class DatabaseManager;
-struct DetectionData;     // 구조체 전방 선언 추가
-struct PersonCountData;   // 구조체 전방 선언 추가
+class SerialCommunicator;
+struct DetectionData;     
+struct PersonCountData;  
 
 class ApiService {
 public:
-    ApiService(crow::SimpleApp& app, StreamProcessor& processor, DatabaseManager& dbManager);
+    //ApiService(crow::SimpleApp& app, StreamProcessor& processor, DatabaseManager& dbManager);
+    ApiService(crow::SimpleApp& app, StreamProcessor& processor, DatabaseManager& dbManager, SerialCommunicator& serial_comm);
     void setupRoutes();
 
     // ▼▼▼ StreamProcessor가 호출할 공개 함수 추가 ▼▼▼
@@ -19,11 +21,13 @@ public:
     void broadcastAnomalyStatus(bool isAnomaly);
     void broadcastNewDetection(const DetectionData& data);
     void broadcastNewBlur(const PersonCountData& data);
+    void handleSTM32StatusCheck();
 
 private:
     crow::SimpleApp& app_;
     StreamProcessor& processor_;
     DatabaseManager& dbManager_;
+    SerialCommunicator& serial_comm_;
 
     // 웹소켓 관련 변수
     std::mutex mtx_; // 연결 목록을 보호하기 위한 뮤텍스
