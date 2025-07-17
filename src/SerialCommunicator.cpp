@@ -83,8 +83,12 @@ std::optional<ParsedFrame> SerialCommunicator::sendAndReceive(const std::vector<
             return std::nullopt;
         }
         std::cout << "[RX RAW] " << STM32Protocol::frameToString(raw_response) << std::endl;
-        ParsedFrame parsed = STM32Protocol::parseFrame(raw_response);
-        return parsed;
+        
+        auto parsed_frame = STM32Protocol::parseFrame(raw_response);
+        if (!parsed_frame) {
+            std::cerr << "[RX] Error: Failed to parse received frame." << std::endl;
+        }
+        return parsed_frame;
 
     } catch (const std::exception& e) {
         std::cerr << "[RX] Error: " << e.what() << std::endl;
@@ -133,4 +137,10 @@ std::vector<uint8_t> SerialCommunicator::read_raw_frame(int timeout_ms) {
         }
     }
     return {};
+}
+
+uint8_t SerialCommunicator::getNextSeq() {
+    uint8_t current_seq = seq_;
+    seq_ = (seq_ + 1) % 256; // 0~255 범위를 순환하도록 함
+    return current_seq;
 }

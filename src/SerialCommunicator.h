@@ -15,10 +15,12 @@ public:
     
     bool send(const std::vector<uint8_t>& frame);
     bool isOpen() const;
+    uint8_t getNextSeq();
 
 private:
     int fd_ = -1;
     bool is_open_ = false;
+    uint8_t seq_ = 0;
 
     // 내부 헬퍼 함수
     int read_byte(uint8_t& out, int timeout_ms);
