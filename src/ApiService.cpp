@@ -7,10 +7,6 @@
 #include "SerialCommunicator.h" 
 #include "STM32Protocol.h"     
 
-// 생성자는 이전과 동일하게 유지합니다.
-//ApiService::ApiService(crow::SimpleApp& app, StreamProcessor& processor, DatabaseManager& dbManager)
-//    : app_(app), processor_(processor), dbManager_(dbManager) {}
-
 ApiService::ApiService(crow::SimpleApp& app, StreamProcessor& processor, DatabaseManager& dbManager, SerialCommunicator& serial_comm)
     : app_(app), processor_(processor), dbManager_(dbManager), serial_comm_(serial_comm) {}
 
