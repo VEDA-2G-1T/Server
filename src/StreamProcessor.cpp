@@ -41,7 +41,6 @@ StreamProcessor::~StreamProcessor() {
         anomaly_detector_->stop();
     }
     if (proc_processed_) pclose(proc_processed_);
-    if (proc_raw_) pclose(proc_raw_);
     if (cap_.isOpened()) cap_.release();
 }
 
@@ -64,10 +63,6 @@ void StreamProcessor::run() {
         if (!cap_.read(frame)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
-        }
-
-        if (proc_raw_) {
-            fwrite(frame.data, 1, frame.total() * frame.elemSize(), proc_raw_);
         }
 
         process_frame_and_stream(frame);
@@ -127,142 +122,138 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
     // 1. 모드 변경 확인 및 모델 로드
     handle_mode_change();
 
-    // 2. 후처리를 위한 프레임 복사
-    cv::Mat display_frame = original_frame.clone();
-
     std::string active_mode;
     {
         std::lock_guard<std::mutex> lock(g_mode_mutex);
         active_mode = g_current_mode;
     }
 
-    // 3. 모드별 처리 시작
-    if (active_mode == "detect" && detector_) {
-        
-        // 3-1. 객체 탐지
-        auto results = detector_->detect(display_frame, 0.4, 0.45);
+    // 최종적으로 스트림에 송출될 프레임을 담을 변수
+    cv::Mat frame_to_stream;
 
-        // 3-2. 위험 상황 판단
-        int person_count = 0, helmet_count = 0, vest_count = 0;
-        const auto& class_names = detector_->get_class_names();
-        for (const auto& res : results) {
-            if (res.class_id < class_names.size()) {
-                const std::string& class_name = class_names[res.class_id];
-                if (class_name == "person") person_count++;
-                else if (class_name == "helmet") helmet_count++;
-                else if (class_name == "safety-vest") vest_count++;
-            }
-        }
+    // 2. 모드에 따라 처리할 프레임을 결정합니다.
+    if (active_mode == "raw") {
+        // "raw" 모드일 경우, 원본 프레임을 그대로 사용합니다.
+        frame_to_stream = original_frame;
+    } else {
+        // 다른 모드("detect", "blur", "stop")일 경우, 복사본으로 처리합니다.
+        cv::Mat processed_frame = original_frame.clone();
 
-        bool is_unsafe = (helmet_count < person_count || vest_count < person_count);
+        if (active_mode == "detect" && detector_) {
+            auto results = detector_->detect(processed_frame, 0.4, 0.45);
 
-        // 음성 안내
-        if (is_unsafe) {
-            if (!audio_notifier.isPlaying()) {
-            bool only_helmet_missing = (helmet_count < person_count) && (vest_count >= person_count);
-            bool only_vest_missing = (vest_count < person_count) && (helmet_count >= person_count);
-
-            if (only_helmet_missing) {
-                audio_notifier.play("sounds/helmet_ment.wav");
-                std::cout << "[INFO] Playing sound: helmet_ment.wav" << std::endl;
-            } else if (only_vest_missing) {
-                audio_notifier.play("sounds/vest_ment.wav");
-                std::cout << "[INFO] Playing sound: vest_ment.wav" << std::endl;
-            } else {
-                audio_notifier.play("sounds/safety_ment.wav");
-                std::cout << "[INFO] Playing sound: safety_ment.wav" << std::endl;
-            }
-            }
-        }
-
-        // 3-3. 위험할 때만 STM32에 신호 전송 명령
-        if (is_unsafe && serial_comm_ && serial_comm_->isOpen()) {
-            uint8_t seq = serial_comm_->getNextSeq();
-            auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
-            uint8_t seq_sent = frame_to_send[3];
-            std::string log_msg = "Sent TOGGLE (seq=" + std::to_string(seq_sent) + ")";
-            
-            auto response = serial_comm_->sendAndReceive(frame_to_send, log_msg);
-
-            if (response && response->cmd == STM32Protocol::CMD_TOGGLE && response->type == STM32Protocol::TYPE_RSP && response->seq == seq_sent) {
-                 std::cout << "[RX] TOGGLE ACK (seq=" << (int)response->seq << ")" << std::endl;
-            }
-        }
-
-        // // 3-3. 탐지 결과를 display_frame에 그리기 (박스 및 텍스트)
-        // const auto& class_names = detector_->get_class_names();
-        for (const auto& res : results) {
-            if (res.class_id < class_names.size()) {
-                std::string class_name = class_names[res.class_id];
-                cv::Scalar color = color_map_.count(class_name) ? color_map_[class_name] : cv::Scalar(0, 0, 255);
-                
-                // 사각형 그리기
-                cv::rectangle(display_frame, res.box, color, 2);
-
-                // 텍스트 그리기 로직 
-                std::stringstream label_ss;
-                label_ss << class_name << " " << std::fixed << std::setprecision(2) << res.confidence;
-                std::string label = label_ss.str();
-                
-                int baseLine;
-                cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
-
-                int text_y = res.box.y - 10;
-                if (text_y < label_size.height) {
-                    text_y = res.box.y + label_size.height + 10;
+            int person_count = 0, helmet_count = 0, vest_count = 0;
+            const auto& class_names = detector_->get_class_names();
+            for (const auto& res : results) {
+                if (res.class_id < class_names.size()) {
+                    const std::string& class_name = class_names[res.class_id];
+                    if (class_name == "person") person_count++;
+                    else if (class_name == "helmet") helmet_count++;
+                    else if (class_name == "safety-vest") vest_count++;
                 }
-
-                cv::rectangle(display_frame, 
-                              cv::Point(res.box.x, text_y - label_size.height - 5),
-                              cv::Point(res.box.x + label_size.width, text_y + baseLine - 5),
-                              color, -1);
-                cv::putText(display_frame, label, cv::Point(res.box.x, text_y - 5), 
-                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
-            }
-        }
-
-        // 3-3. 박스와 텍스트가 모두 그려진 display_frame을 DB에 저장
-        if (time(0) - last_save_time_ >= 3) {
-            auto saved_data = db_manager_.saveDetectionLog(camera_id_, results, display_frame, *detector_);
-
-            // 등록된 콜백이 있으면 호출 
-            if (detection_callback_ && saved_data.has_value()) {
-                detection_callback_(saved_data.value());
             }
 
-            last_save_time_ = time(0);
-        }
+            bool is_unsafe = (helmet_count < person_count || vest_count < person_count);
 
-    } else if (active_mode == "blur" && segmenter_) {
-        SegmentationResult seg_result = segmenter_->process_frame(display_frame);
-        if (time(0) - last_save_time_ >= 3) {
-            auto saved_data = db_manager_.saveBlurLog(camera_id_, seg_result.person_count);
-            std::cout << "DB 저장 호출: 카메라 " << camera_id_ << ", " << seg_result.person_count << "명" << std::endl;
+            // 음성 안내
+            if (is_unsafe) {
+                if (!audio_notifier.isPlaying()) {
+                    bool only_helmet_missing = (helmet_count < person_count) && (vest_count >= person_count);
+                    bool only_vest_missing = (vest_count < person_count) && (helmet_count >= person_count);
 
-            // 등록된 콜백이 있으면 호출 
-            if (blur_callback_ && saved_data.has_value()) {
-            blur_callback_(saved_data.value());
+                    if (only_helmet_missing) {
+                        std::cout << "[INFO] Playing sound: helmet_ment.wav" << std::endl;
+                        audio_notifier.play("sounds/helmet_ment.wav");
+                    } else if (only_vest_missing) {
+                        std::cout << "[INFO] Playing sound: vest_ment.wav" << std::endl;
+                        audio_notifier.play("sounds/vest_ment.wav");
+                    } else {
+                        std::cout << "[INFO] Playing sound: safety_ment.wav" << std::endl;
+                        audio_notifier.play("sounds/safety_ment.wav");
+                    }
+                }
             }
 
-            last_save_time_ = time(0);
-        }
+            // STM32 신호 전송
+            if (is_unsafe && serial_comm_ && serial_comm_->isOpen()) {
+                uint8_t seq = serial_comm_->getNextSeq();
+                auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
+                // 응답을 기다리지 않는 sendOnly로 변경하는 것을 고려해볼 수 있습니다.
+                serial_comm_->sendAndReceive(frame_to_send, "Sent TOGGLE (seq=" + std::to_string(seq) + ")");
+            }
 
-    } else if (active_mode == "stop") {
-        cv::putText(display_frame, "STOPPED", cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+            // 탐지 결과 그리기
+            for (const auto& res : results) {
+                if (res.class_id < class_names.size()) {
+                    std::string class_name = class_names[res.class_id];
+                    cv::Scalar color = color_map_.count(class_name) ? color_map_[class_name] : cv::Scalar(0, 0, 255);
+                    
+                    // 사각형 그리기
+                    cv::rectangle(processed_frame, res.box, color, 2);
+
+                    // 텍스트 그리기 로직 
+                    std::stringstream label_ss;
+                    label_ss << class_name << " " << std::fixed << std::setprecision(2) << res.confidence;
+                    std::string label = label_ss.str();
+                    
+                    int baseLine;
+                    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+
+                    int text_y = res.box.y - 10;
+                    if (text_y < label_size.height) {
+                        text_y = res.box.y + label_size.height + 10;
+                    }
+
+                    cv::rectangle(processed_frame, 
+                                cv::Point(res.box.x, text_y - label_size.height - 5),
+                                cv::Point(res.box.x + label_size.width, text_y + baseLine - 5),
+                                color, -1);
+                    cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5), 
+                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                }
+            }
+
+
+            // DB 저장
+            if (time(0) - last_save_time_ >= 3) {
+                auto saved_data = db_manager_.saveDetectionLog(camera_id_, results, processed_frame, *detector_);
+                if (detection_callback_ && saved_data.has_value()) {
+                    detection_callback_(saved_data.value());
+                }
+                last_save_time_ = time(0);
+            }
+
+        } else if (active_mode == "blur" && segmenter_) {
+            SegmentationResult seg_result = segmenter_->process_frame(processed_frame);
+            if (time(0) - last_save_time_ >= 3) {
+                auto saved_data = db_manager_.saveBlurLog(camera_id_, seg_result.person_count);
+                if (blur_callback_ && saved_data.has_value()) {
+                    blur_callback_(saved_data.value());
+                }
+                last_save_time_ = time(0);
+            }
+
+        } else if (active_mode == "stop") {
+            cv::putText(processed_frame, "STOPPED", cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+        }
+        
+        // 처리된 프레임을 송출할 프레임으로 지정합니다.
+        frame_to_stream = processed_frame;
     }
 
-    // 4. 최종 프레임에 모드 텍스트와 이상탐지 상태를 그리고 스트리밍
-    cv::putText(display_frame, "MODE: " + active_mode, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
-    
-    // 이상탐지 상태 표시
-    if (anomaly_detected_.load()) {
-        cv::putText(display_frame, "ANOMALY DETECTED!", cv::Point(10, 90), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
-    }
+    // 3. 최종 프레임에 공통 상태 정보를 그리고 스트리밍합니다.
+    if (!frame_to_stream.empty()) {
+        cv::putText(frame_to_stream, "MODE: " + active_mode, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
+        if (anomaly_detected_.load()) {
+            cv::putText(frame_to_stream, "ANOMALY DETECTED!", cv::Point(10, 90), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+        }
 
-    if (proc_processed_) {
-        fwrite(display_frame.data, 1, display_frame.total() * display_frame.elemSize(), proc_processed_);
+        if (proc_processed_) {
+            fwrite(frame_to_stream.data, 1, frame_to_stream.total() * frame_to_stream.elemSize(), proc_processed_);
+        }
     }
 }
+
 
 // (handle_mode_change 및 나머지 헬퍼 함수들은 이전과 동일)
 void StreamProcessor::handle_mode_change() {
@@ -276,6 +267,14 @@ void StreamProcessor::handle_mode_change() {
         detector_.reset();
         segmenter_.reset();
         std::cout << "모드 변경 시도: " << active_mode << std::endl;
+        
+        // ✅ "raw" 또는 "stop" 모드는 모델 로딩이 필요 없음
+        if (active_mode == "raw" || active_mode == "stop") {
+            last_loaded_mode_ = active_mode;
+            std::cout << active_mode << " 모드로 전환 (모델 로드 없음)" << std::endl;
+            return; // 모델 로드 없이 함수 종료
+        }
+
         try {
             if (active_mode == "detect") {
                 detector_ = std::make_unique<Detector>(detection_model_path_);
@@ -291,7 +290,6 @@ void StreamProcessor::handle_mode_change() {
         }
     }
 }
-
 bool StreamProcessor::initialize_camera() {
     cap_.open(gstreamer_pipeline(), cv::CAP_GSTREAMER);
     if (!cap_.isOpened()) {
@@ -302,14 +300,14 @@ bool StreamProcessor::initialize_camera() {
 }
 
 bool StreamProcessor::initialize_streamers() {
-    proc_processed_ = create_ffmpeg_process(rtsp_url_processed_);
-    proc_raw_ = create_ffmpeg_process(rtsp_url_raw_);
-    if (!proc_processed_ || !proc_raw_) {
+    proc_processed_ = create_ffmpeg_process(rtsp_url_);
+    if (!proc_processed_) {
         std::cerr << "오류: FFmpeg 프로세스를 생성할 수 없습니다." << std::endl;
         return false;
     }
     return true;
 }
+
 
 FILE* StreamProcessor::create_ffmpeg_process(const std::string& rtsp_url) {
     std::string cmd = "ffmpeg -f rawvideo -pixel_format bgr24 -video_size " +

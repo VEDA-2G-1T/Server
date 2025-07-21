@@ -61,12 +61,10 @@ private:
     const int camera_id_ = 1;
     int capture_width_ = 320;
     int capture_height_ = 240;
-    int framerate_ = 15;
+    int framerate_ = 30;
     cv::VideoCapture cap_;
     FILE* proc_processed_ = nullptr;
-    FILE* proc_raw_ = nullptr;
-    std::string rtsp_url_processed_ = "rtsps://127.0.0.1:8555/processed";
-    std::string rtsp_url_raw_ = "rtsps://127.0.0.1:8555/raw";
+    std::string rtsp_url_ = "rtsps://127.0.0.1:8555/processed";
 
     // 모델 관리
     std::unique_ptr<Detector> detector_;
