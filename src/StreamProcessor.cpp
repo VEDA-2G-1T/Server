@@ -81,6 +81,8 @@ void StreamProcessor::onAnomalyStatusChanged(std::function<void(bool)> callback)
 void StreamProcessor::onNewDetection(std::function<void(const DetectionData&)> callback) { detection_callback_ = callback; }
 void StreamProcessor::onNewBlur(std::function<void(const PersonCountData&)> callback) { blur_callback_ = callback; }
 void StreamProcessor::onNewFall(std::function<void(const FallCountData&)> callback) { fall_callback_ = callback; }
+void StreamProcessor::onNewTrespass(std::function<void(const TrespassLogData&)> callback) { trespass_callback_ = callback; }
+
 
 void StreamProcessor::handle_anomaly_detection() {
     // 1초마다 이상탐지 상태 확인
@@ -228,6 +230,65 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
                 last_save_time_ = time(0);
             }
 
+        } else if (active_mode == "trespass" && detector_) {
+            auto results = detector_->detect(processed_frame, 0.4, 0.45);
+            
+            int person_count = 0;
+            const auto& class_names = detector_->get_class_names();
+            for (const auto& res : results) {
+                if (res.class_id < class_names.size() && class_names[res.class_id] == "person") {
+                    person_count++;
+                }
+            }
+            
+            bool trespass_detected = (person_count > 0);
+
+            if (trespass_detected && serial_comm_ && serial_comm_->isOpen()) {
+                uint8_t seq = serial_comm_->getNextSeq();
+                auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
+                // 응답을 기다리지 않는 sendOnly로 변경하는 것을 고려해볼 수 있습니다.
+                serial_comm_->sendAndReceive(frame_to_send, "Sent TOGGLE (seq=" + std::to_string(seq) + ")");
+            }
+            
+            // 결과 그리기 (person만 빨간색으로)
+            for (const auto& res : results) {
+                if (res.class_id < class_names.size() && class_names[res.class_id] == "person") {
+                    cv::rectangle(processed_frame, res.box, cv::Scalar(0, 0, 255), 2);
+                    // 1. 표시할 라벨 생성 ("person" + 신뢰도 점수)
+                    std::string label = "person " + cv::format("%.2f", res.confidence);
+                    cv::Scalar color = cv::Scalar(0, 0, 255); // 빨간색
+
+                    // 2. 텍스트 배경을 위한 설정
+                    int baseLine;
+                    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+                    int text_y = res.box.y - 10;
+                    if (text_y < label_size.height) {
+                        text_y = res.box.y + res.box.height + label_size.height + 5;
+                    }
+
+                    // 3. 텍스트 배경 사각형 그리기
+                    cv::rectangle(processed_frame,
+                                cv::Point(res.box.x, text_y - label_size.height - 5),
+                                cv::Point(res.box.x + label_size.width, text_y + baseLine - 5),
+                                color, -1);
+
+                    // 4. 실제 텍스트 그리기
+                    cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5),
+                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                }
+            }
+
+            // DB 저장 및 웹소켓 알림
+            if (time(0) - last_save_time_ >= 3) {
+                if (trespass_detected) {
+                    auto saved_data = db_manager_.saveTrespassLog(camera_id_, person_count, processed_frame);
+                    if (trespass_callback_ && saved_data.has_value()) {
+                        trespass_callback_(saved_data.value());
+                    }
+                }
+                last_save_time_ = time(0);
+            }
+
         } else if (active_mode == "fall" && fall_) {
             // 1. 넘어짐 탐지 실행
             auto results = fall_->detect(processed_frame, 0.4, 0.45);
@@ -345,8 +406,10 @@ void StreamProcessor::handle_mode_change() {
         }
 
         try {
-            if (active_mode == "detect") {
-                detector_ = std::make_unique<Detector>(detection_model_path_);
+            if (active_mode == "detect" || active_mode == "trespass") {
+                if (!detector_ || last_loaded_mode_ != "detect" && last_loaded_mode_ != "trespass") {
+                    detector_ = std::make_unique<Detector>(detection_model_path_);
+                }
             } else if (active_mode == "blur") {
                 segmenter_ = std::make_unique<Segmenter>(segmentation_model_path_);
             } else if (active_mode == "fall") {

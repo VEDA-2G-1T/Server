@@ -5,8 +5,8 @@
 #include <sys/stat.h>
 
 // ★ 수정: 생성자에서 모든 경로를 받아 멤버 변수에 저장
-DatabaseManager::DatabaseManager(const std::string& detection_db_path, const std::string& blur_db_path, const std::string& fall_db_path, const std::string& image_save_dir)
-    : detection_db_path_(detection_db_path), blur_db_path_(blur_db_path), fall_db_path_(fall_db_path), image_save_dir_(image_save_dir) {
+DatabaseManager::DatabaseManager(const std::string& detection_db_path, const std::string& blur_db_path, const std::string& fall_db_path, const std::string& trespass_db_path, const std::string& image_save_dir)
+    : detection_db_path_(detection_db_path), blur_db_path_(blur_db_path), fall_db_path_(fall_db_path), trespass_db_path_(trespass_db_path), image_save_dir_(image_save_dir) {
     initDatabases();
 }
 
@@ -41,6 +41,15 @@ void DatabaseManager::initDatabases() {
         const char* sql = "CREATE TABLE IF NOT EXISTS fall_counts ("
                           "camera_id INTEGER NOT NULL, "
                           "timestamp TEXT NOT NULL, count INTEGER NOT NULL);";
+        sqlite3_exec(db, sql, 0, 0, 0);
+        sqlite3_close(db);
+    }
+    if (sqlite3_open(trespass_db_path_.c_str(), &db) == SQLITE_OK) {
+        const char* sql = "CREATE TABLE IF NOT EXISTS trespass_logs ("
+                          "camera_id INTEGER NOT NULL, "
+                          "timestamp TEXT NOT NULL, "
+                          "count INTEGER NOT NULL, "
+                          "image_path TEXT);"; 
         sqlite3_exec(db, sql, 0, 0, 0);
         sqlite3_close(db);
     }
@@ -219,4 +228,67 @@ std::optional<FallCountData> DatabaseManager::saveFallLog(int camera_id, int fal
     data.timestamp = timestamp_str;
     data.count = fall_count;
     return data;
+}
+
+std::optional<TrespassLogData> DatabaseManager::saveTrespassLog(int camera_id, int person_count, const cv::Mat& frame) {
+    // 1. 이미지 파일 저장 (detect 모드와 동일한 로직)
+    std::string timestamp_str = get_current_timestamp();
+    std::string timestamp_file = timestamp_str;
+    std::replace(timestamp_file.begin(), timestamp_file.end(), ':', '-');
+    std::replace(timestamp_file.begin(), timestamp_file.end(), ' ', '_');
+    std::string image_path = image_save_dir_ + "/" + timestamp_file + "_trespass.jpg";
+    cv::imwrite(image_path, frame);
+
+    // 2. DB에 로그 저장
+    sqlite3* db;
+    if (sqlite3_open(trespass_db_path_.c_str(), &db) != SQLITE_OK) {
+        return std::nullopt;
+    }
+
+    const char* sql = "INSERT INTO trespass_logs (camera_id, timestamp, count, image_path) VALUES(?,?,?,?);";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, camera_id);
+        sqlite3_bind_text(stmt, 2, timestamp_str.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 3, person_count);
+        sqlite3_bind_text(stmt, 4, image_path.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    // 3. 저장된 데이터를 담은 객체 반환
+    TrespassLogData data;
+    data.camera_id = camera_id;
+    data.timestamp = timestamp_str;
+    data.count = person_count;
+    data.image_path = image_path;
+    return data;
+}
+
+bool DatabaseManager::getTrespassLogs(std::vector<TrespassLogData>& logs) {
+    sqlite3* db;
+    if (sqlite3_open(trespass_db_path_.c_str(), &db) != SQLITE_OK) return false;
+
+    const char* sql = "SELECT camera_id, timestamp, count, image_path FROM trespass_logs ORDER BY timestamp DESC;";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        sqlite3_close(db);
+        return false;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        TrespassLogData data;
+        data.camera_id = sqlite3_column_int(stmt, 0);
+        const char* ts = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        data.timestamp = ts ? ts : "";
+        data.count = sqlite3_column_int(stmt, 2);
+        const char* img_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        data.image_path = img_path ? img_path : "";
+        logs.push_back(data);
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return true;
 }

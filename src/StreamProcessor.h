@@ -20,6 +20,7 @@ struct DetectionResult;
 struct DetectionData;
 struct PersonCountData;
 struct FallCountData;
+struct TrespassLogData;
 
 class StreamProcessor {
 public:
@@ -38,6 +39,7 @@ public:
     void onNewDetection(std::function<void(const DetectionData&)> callback);
     void onNewBlur(std::function<void(const PersonCountData&)> callback);
     void onNewFall(std::function<void(const FallCountData&)> callback);
+    void onNewTrespass(std::function<void(const TrespassLogData&)> callback);
 
 private:
     // 초기화 헬퍼 함수
@@ -92,6 +94,7 @@ private:
     std::function<void(const DetectionData&)> detection_callback_;
     std::function<void(const PersonCountData&)> blur_callback_;
     std::function<void(const FallCountData&)> fall_callback_;
+    std::function<void(const TrespassLogData&)> trespass_callback_;
 
     // PPE detect시 스피커 송출 관련 멤버 변수
     AudioNotifier audio_notifier; 

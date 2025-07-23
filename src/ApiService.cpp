@@ -100,6 +100,35 @@ void ApiService::setupRoutes() {
             return res;
         }
     });
+
+    CROW_ROUTE(app_, "/api/trespass")([this] {
+        std::vector<TrespassLogData> results;
+        nlohmann::json response_json;
+
+        if (dbManager_.getTrespassLogs(results)) {
+            nlohmann::json tres_array = nlohmann::json::array();
+            for (const auto& data : results) {
+                nlohmann::json tres_obj;
+                tres_obj["camera_id"] = data.camera_id;
+                tres_obj["timestamp"] = data.timestamp;
+                tres_obj["count"] = data.count;
+                tres_obj["image_path"] = data.image_path;
+                tres_array.push_back(tres_obj);
+            }
+            response_json["status"] = "success";
+            response_json["detections"] = tres_array;
+
+            crow::response res(response_json.dump());
+            res.set_header("Content-Type", "application/json");
+            return res;
+        } else {
+            response_json["status"] = "error";
+            response_json["message"] = "Failed to fetch detections from database.";
+            crow::response res(500, response_json.dump());
+            res.set_header("Content-Type", "application/json");
+            return res;
+        }
+    });
 }
 
 // 웹소켓 broadcast
@@ -156,6 +185,20 @@ void ApiService::broadcastNewFall(const FallCountData& data) {
     msg["data"]["camera_id"] = data.camera_id;
     msg["data"]["timestamp"] = data.timestamp;
     msg["data"]["count"] = data.count;
+
+    std::lock_guard<std::mutex> _(mtx_);
+    for (auto user : ws_users_) {
+        user->send_text(msg.dump());
+    }
+}
+
+void ApiService::broadcastNewTrespass(const TrespassLogData& data) {
+    nlohmann::json msg;
+    msg["type"] = "new_trespass";
+    msg["data"]["camera_id"] = data.camera_id;
+    msg["data"]["timestamp"] = data.timestamp;
+    msg["data"]["count"] = data.count;
+    msg["data"]["image_path"] = data.image_path; 
 
     std::lock_guard<std::mutex> _(mtx_);
     for (auto user : ws_users_) {

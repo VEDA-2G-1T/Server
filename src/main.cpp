@@ -10,7 +10,7 @@
 #include <iostream>
 
 // 전역 변수 선언
-std::string g_current_mode = "detect";
+std::string g_current_mode = "raw";
 std::mutex g_mode_mutex;
 std::atomic<bool> g_keep_running(true);
 
@@ -26,7 +26,7 @@ int main() {
     signal(SIGTERM, signal_handler);
 
     // 2. 핵심 컴포넌트 생성
-    DatabaseManager dbManager("data/detections.db", "data/blur.db", "data/fall.db", "captured_images");
+    DatabaseManager dbManager("data/detections.db", "data/blur.db", "data/fall.db", "data/trespass.db", "captured_images");
     StreamProcessor streamProcessor(dbManager);
     SerialCommunicator& serial_comm = streamProcessor.getSerialCommunicator();
     
@@ -49,6 +49,10 @@ int main() {
 
     streamProcessor.onNewFall([&apiService](const FallCountData& data) {
         apiService.broadcastNewFall(data);
+    });
+
+    streamProcessor.onNewTrespass([&apiService](const TrespassLogData& data) {
+        apiService.broadcastNewTrespass(data);
     });
 
     // 3. API 서버를 백그라운드 스레드에서 실행

@@ -10,6 +10,7 @@ class SerialCommunicator;
 struct DetectionData;     
 struct PersonCountData;  
 struct FallCountData;
+struct TrespassLogData;
 
 class ApiService {
 public:
@@ -23,6 +24,7 @@ public:
     void broadcastNewDetection(const DetectionData& data);
     void broadcastNewBlur(const PersonCountData& data);
     void broadcastNewFall(const FallCountData& data);
+    void broadcastNewTrespass(const TrespassLogData& data);
     void handleSTM32StatusCheck();
 
 private:

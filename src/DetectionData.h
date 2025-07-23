@@ -25,3 +25,10 @@ struct FallCountData {
     std::string timestamp;
     int count;
 };
+
+struct TrespassLogData {
+    int camera_id;
+    std::string timestamp;
+    int count;
+    std::string image_path;
+};
