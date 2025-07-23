@@ -12,12 +12,14 @@
 // 클래스 전방 선언 (순환 참조 방지)
 class Detector;
 class Segmenter;
+class Fall;
 class DatabaseManager;
 class SerialCommunicator;
 class AnomalyDetector;
 struct DetectionResult;
 struct DetectionData;
 struct PersonCountData;
+struct FallCountData;
 
 class StreamProcessor {
 public:
@@ -35,6 +37,7 @@ public:
     void onAnomalyStatusChanged(std::function<void(bool)> callback);
     void onNewDetection(std::function<void(const DetectionData&)> callback);
     void onNewBlur(std::function<void(const PersonCountData&)> callback);
+    void onNewFall(std::function<void(const FallCountData&)> callback);
 
 private:
     // 초기화 헬퍼 함수
@@ -69,9 +72,11 @@ private:
     // 모델 관리
     std::unique_ptr<Detector> detector_;
     std::unique_ptr<Segmenter> segmenter_;
+    std::unique_ptr<Fall> fall_;
     std::string last_loaded_mode_ = "none";
     std::string detection_model_path_ = "models/detect_192.tflite";
     std::string segmentation_model_path_ = "models/yolo11n-seg.onnx";
+    std::string fall_model_path_ = "models/fall_192.tflite";
 
     // 그리기 및 DB 저장 주기
     std::map<std::string, cv::Scalar> color_map_;
@@ -86,6 +91,7 @@ private:
     std::function<void(bool)> anomaly_callback_;
     std::function<void(const DetectionData&)> detection_callback_;
     std::function<void(const PersonCountData&)> blur_callback_;
+    std::function<void(const FallCountData&)> fall_callback_;
 
     // PPE detect시 스피커 송출 관련 멤버 변수
     AudioNotifier audio_notifier; 

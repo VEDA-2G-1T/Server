@@ -9,6 +9,7 @@ class DatabaseManager;
 class SerialCommunicator;
 struct DetectionData;     
 struct PersonCountData;  
+struct FallCountData;
 
 class ApiService {
 public:
@@ -21,6 +22,7 @@ public:
     void broadcastAnomalyStatus(bool isAnomaly);
     void broadcastNewDetection(const DetectionData& data);
     void broadcastNewBlur(const PersonCountData& data);
+    void broadcastNewFall(const FallCountData& data);
     void handleSTM32StatusCheck();
 
 private:

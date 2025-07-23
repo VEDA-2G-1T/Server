@@ -25,8 +25,43 @@ void ApiService::setupRoutes() {
         .onmessage([this](crow::websocket::connection& conn, const std::string& data, bool is_binary) {
             try {
                 auto json_req = nlohmann::json::parse(data);
-                if (json_req.value("type", "") == "request_stm_status") {
+                std::string type = json_req.value("type", "");
+
+                if (type == "request_stm_status") {
                     handleSTM32StatusCheck();
+                } 
+                else if (type == "set_mode") {
+                    std::string mode = json_req.value("mode", "stop");
+                    
+                    // 기존 POST 라우트에 있던 유효성 검사 로직을 그대로 가져옵니다.
+                    std::vector<std::string> valid_modes = {"detect", "blur", "raw", "stop", "trespass", "fall"};
+                    bool is_valid = false;
+                    for (const auto& valid_mode : valid_modes) {
+                        if (mode == valid_mode) {
+                            is_valid = true;
+                            break;
+                        }
+                    }
+
+                    if (is_valid) {
+                        std::lock_guard<std::mutex> lock(g_mode_mutex);
+                        g_current_mode = mode;
+                        std::cout << "모드가 다음으로 변경되었습니다 : " << mode << std::endl;
+                        
+                        // (선택) 요청한 클라이언트에게 성공했다는 응답(ACK)을 보내줍니다.
+                        nlohmann::json res;
+                        res["type"] = "mode_change_ack";
+                        res["status"] = "success";
+                        res["mode"] = mode;
+                        conn.send_text(res.dump());
+                    } else {
+                        // (선택) 요청한 클라이언트에게 실패했다는 응답(NACK)을 보내줍니다.
+                        nlohmann::json res;
+                        res["type"] = "mode_change_ack";
+                        res["status"] = "error";
+                        res["message"] = "Invalid mode requested: " + mode;
+                        conn.send_text(res.dump());
+                    }
                 }
             } catch (const std::exception& e) {
                 CROW_LOG_ERROR << "Invalid WebSocket message: " << e.what();
@@ -65,33 +100,6 @@ void ApiService::setupRoutes() {
             return res;
         }
     });
-
-    // /api/mode 라우트
-    CROW_ROUTE(app_, "/api/mode").methods("POST"_method)
-    ([this](const crow::request& req){
-        auto data = nlohmann::json::parse(req.body);
-        std::string mode = data.value("mode", "detect");
-
-        std::vector<std::string> valid_modes = {"detect", "blur", "raw", "stop"};
-        bool is_valid = false;
-        for (const auto& valid_mode : valid_modes) {
-            if (mode == valid_mode) {
-                is_valid = true;
-                break;
-            }
-        }
-
-        if (is_valid) {
-            std::lock_guard<std::mutex> lock(g_mode_mutex);
-            g_current_mode = mode;
-            
-            std::cout << "모드가 다음으로 변경되었습니다: " << mode << std::endl;
-            return crow::response(200, "{\"status\":\"success\", \"message\":\"모드가 성공적으로 변경되었습니다.\"}");
-        }
-        
-        return crow::response(400, "{\"status\":\"error\", \"message\":\"유효하지 않은 모드입니다.\"}");
-    });
-
 }
 
 // 웹소켓 broadcast
@@ -140,6 +148,19 @@ void ApiService::broadcastNewBlur(const PersonCountData& data) {
 
     std::lock_guard<std::mutex> _(mtx_);
     for (auto user : ws_users_) user->send_text(msg.dump());
+}
+
+void ApiService::broadcastNewFall(const FallCountData& data) {
+    nlohmann::json msg;
+    msg["type"] = "new_fall";
+    msg["data"]["camera_id"] = data.camera_id;
+    msg["data"]["timestamp"] = data.timestamp;
+    msg["data"]["count"] = data.count;
+
+    std::lock_guard<std::mutex> _(mtx_);
+    for (auto user : ws_users_) {
+        user->send_text(msg.dump());
+    }
 }
 
 void ApiService::handleSTM32StatusCheck() {

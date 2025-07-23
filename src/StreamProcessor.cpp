@@ -2,6 +2,7 @@
 #include "SharedState.h"
 #include "detector.h"
 #include "segmenter.h"
+#include "fall.h"
 #include "DatabaseManager.h"
 #include "SerialCommunicator.h" 
 #include "STM32Protocol.h"    
@@ -18,6 +19,9 @@ StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbMan
     color_map_["person"] = cv::Scalar(0, 255, 0);
     color_map_["helmet"] = cv::Scalar(255, 178, 51);
     color_map_["safety-vest"] = cv::Scalar(0, 128, 255);
+
+    color_map_["fall"] = cv::Scalar(0, 0, 255); 
+    color_map_["stand"] = cv::Scalar(255, 0, 0); 
 
     // 시리얼 통신 객체 생성
     serial_comm_ = std::make_unique<SerialCommunicator>("/dev/ttyACM0", B115200);
@@ -76,6 +80,7 @@ void StreamProcessor::run() {
 void StreamProcessor::onAnomalyStatusChanged(std::function<void(bool)> callback) { anomaly_callback_ = callback; }
 void StreamProcessor::onNewDetection(std::function<void(const DetectionData&)> callback) { detection_callback_ = callback; }
 void StreamProcessor::onNewBlur(std::function<void(const PersonCountData&)> callback) { blur_callback_ = callback; }
+void StreamProcessor::onNewFall(std::function<void(const FallCountData&)> callback) { fall_callback_ = callback; }
 
 void StreamProcessor::handle_anomaly_detection() {
     // 1초마다 이상탐지 상태 확인
@@ -223,12 +228,76 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
                 last_save_time_ = time(0);
             }
 
+        } else if (active_mode == "fall" && fall_) {
+            // 1. 넘어짐 탐지 실행
+            auto results = fall_->detect(processed_frame, 0.4, 0.45);
+    
+            // 2. 넘어짐 상황 판단
+            bool fall_detected = false;
+            const auto& class_names = fall_->get_class_names();
+            for (const auto& res : results) {
+                if (res.class_id < class_names.size()) {
+                    if (class_names[res.class_id] == "fall") {
+                        fall_detected = true;
+                        break; // 한 명이라도 넘어지면 즉시 알림
+                    }
+                }
+            }
+    
+            // 3. 넘어짐 발생 시 음성 안내 및 STM32 신호 전송
+            if (fall_detected) {
+                if (!audio_notifier.isPlaying()) {
+                    audio_notifier.play("sounds/fall_ment.wav");
+                    std::cout << "[INFO] Playing sound: fall_ment.wav" << std::endl;
+                }
+                if (serial_comm_ && serial_comm_->isOpen()) {
+                    uint8_t seq = serial_comm_->getNextSeq();
+                    auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
+                    serial_comm_->sendAndReceive(frame_to_send, "Sent FALL ALERT");
+                }
+            }
+
+            // 4. DB 저장 (필요 시 구현, 여기서는 예시로 넘어짐 카운트만 저장)
+            if (time(0) - last_save_time_ >= 3) {
+                if(fall_detected) {
+                    auto saved_data = db_manager_.saveFallLog(camera_id_, fall_detected);
+                    if (fall_callback_ && saved_data.has_value()) {
+                        fall_callback_(saved_data.value());
+                    }
+                }
+                last_save_time_ = time(0);
+            }
+            
+            // 5. 탐지 결과를 display_frame에 그리기
+            for (const auto& res : results) {
+                if (res.class_id < class_names.size()) {
+                    std::string class_name = class_names[res.class_id];
+                    cv::Scalar color = color_map_.count(class_name) ? color_map_[class_name] : cv::Scalar(255, 255, 255);
+                    
+                    cv::rectangle(processed_frame, res.box, color, 2);
+                    std::string label = class_name + " " + cv::format("%.2f", res.confidence);
+                    
+                    int baseLine;
+                    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+                    int text_y = res.box.y - 10;
+                    if (text_y < label_size.height) {
+                        text_y = res.box.y + label_size.height + 10;
+                    }
+                    cv::rectangle(processed_frame, cv::Point(res.box.x, text_y - label_size.height - 5), cv::Point(res.box.x + label_size.width, text_y + baseLine), color, -1);
+                    cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                }
+            }
+    
         } else if (active_mode == "blur" && segmenter_) {
             SegmentationResult seg_result = segmenter_->process_frame(processed_frame);
+            int blur_count = seg_result.person_count;
+
             if (time(0) - last_save_time_ >= 3) {
-                auto saved_data = db_manager_.saveBlurLog(camera_id_, seg_result.person_count);
-                if (blur_callback_ && saved_data.has_value()) {
-                    blur_callback_(saved_data.value());
+                if(blur_count > 0) {
+                    auto saved_data = db_manager_.saveBlurLog(camera_id_, blur_count);
+                    if (blur_callback_ && saved_data.has_value()) {
+                        blur_callback_(saved_data.value());
+                    }
                 }
                 last_save_time_ = time(0);
             }
@@ -280,6 +349,8 @@ void StreamProcessor::handle_mode_change() {
                 detector_ = std::make_unique<Detector>(detection_model_path_);
             } else if (active_mode == "blur") {
                 segmenter_ = std::make_unique<Segmenter>(segmentation_model_path_);
+            } else if (active_mode == "fall") {
+                fall_ = std::make_unique<Fall>(fall_model_path_);
             }
             last_loaded_mode_ = active_mode;
             last_save_time_ = time(0); 

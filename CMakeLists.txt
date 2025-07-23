@@ -47,6 +47,7 @@ set(SOURCES
     src/STM32Protocol.cpp
     src/AnomalyDetector.cpp
     src/AudioNotifier.cpp
+    src/fall.cpp
     ${YOLO_SOURCES}
 )
 

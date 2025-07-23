@@ -19,3 +19,9 @@ struct PersonCountData {
     std::string timestamp;
     int count;
 };
+
+struct FallCountData {
+    int camera_id;
+    std::string timestamp;
+    int count;
+};

@@ -26,7 +26,7 @@ int main() {
     signal(SIGTERM, signal_handler);
 
     // 2. 핵심 컴포넌트 생성
-    DatabaseManager dbManager("data/detections.db", "data/blur.db", "captured_images");
+    DatabaseManager dbManager("data/detections.db", "data/blur.db", "data/fall.db", "captured_images");
     StreamProcessor streamProcessor(dbManager);
     SerialCommunicator& serial_comm = streamProcessor.getSerialCommunicator();
     
@@ -45,6 +45,10 @@ int main() {
 
     streamProcessor.onNewBlur([&apiService](const PersonCountData& data) {
         apiService.broadcastNewBlur(data);
+    });
+
+    streamProcessor.onNewFall([&apiService](const FallCountData& data) {
+        apiService.broadcastNewFall(data);
     });
 
     // 3. API 서버를 백그라운드 스레드에서 실행
