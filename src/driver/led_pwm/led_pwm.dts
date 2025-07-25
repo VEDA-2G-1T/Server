@@ -1,0 +1,70 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2835"; // Match the Broadcom BCM2835 SoC (e.g., Raspberry Pi)
+
+    /*
+     * Enable the core PWM controller node
+     * This ensures the PWM hardware block is powered and available
+     */
+    fragment@0 {
+        target = <&pwm>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+    /*
+     * Add a new device node compatible with "veda_1,ledpwm"
+     * This node represents a LED PWM client device that will be probed
+     * by the kernel driver registered with that compatible string.
+     *
+     * The 'pwms' property specifies:
+     *   - PWM controller: &pwm
+     *   - PWM channel index: 1 (i.e., PWM1)
+     *   - PWM period: 1000000 ns (1 ms)
+     *
+     * The pinctrl settings assign the correct GPIO muxing for the PWM output.
+     */
+    fragment@1 {
+        target-path = "/";
+        __overlay__ {
+            my_led: ledpwm@0 {
+                compatible = "veda_1,ledpwm";
+                pwms = <&pwm 1 1000000>; // Use PWM1, 1ms period (1kHz)
+                pinctrl-names = "default";
+                pinctrl-0 = <&led_pwm_pins>;
+                status = "okay";
+            };
+        };
+    };
+
+    /*
+     * Define a pinctrl node to configure GPIO13 for ALT0 function (PWM1)
+     *
+     * brcm,pins = <13>;         // Use GPIO13
+     * brcm,function = <4>;      // ALT0 function = PWM1 output
+     */
+    fragment@2 {
+        target = <&gpio>;
+        __overlay__ {
+            led_pwm_pins: led_pwm_pins {
+                brcm,pins = <13>;
+                brcm,function = <4>; // ALT0 mode = PWM1
+                phandle = <0x01>;   // Reference handle used by pinctrl-0
+            };
+        };
+    };
+
+    /*
+     * Define an override key for dynamic adjustment of the PWM period
+     *
+     * This allows the device tree overlay to accept a parameter like:
+     *   dtoverlay=my-led-overlay,period=2000000
+     * Which will replace the 2nd cell (index 1) of 'pwms' (i.e., period_ns)
+     */
+    __overrides__ {
+        period = <&my_led>,"pwms:0:1";
+    };
+};
