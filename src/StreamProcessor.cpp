@@ -15,7 +15,7 @@
 #include <termios.h>
 
 // 생성자
-StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbManager) {
+StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbManager), brightness_beta_(0) {
     color_map_["person"] = cv::Scalar(0, 255, 0);
     color_map_["helmet"] = cv::Scalar(255, 178, 51);
     color_map_["safety-vest"] = cv::Scalar(0, 128, 255);
@@ -51,6 +51,12 @@ StreamProcessor::~StreamProcessor() {
 bool StreamProcessor::isAnomalyDetected() const {
     // anomaly_detected_ 변수의 현재 값을 안전하게 읽어서 반환합니다.
     return anomaly_detected_.load();
+}
+
+void StreamProcessor::setBrightness(int beta) {
+    std::lock_guard<std::mutex> lock(image_processing_settings_mutex_);
+    brightness_beta_ = beta;
+    std::cout << "밝기 설정 변경: " << brightness_beta_ << std::endl;
 }
 
 // 메인 루프 실행
@@ -135,251 +141,251 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
         active_mode = g_current_mode;
     }
 
-    // 최종적으로 스트림에 송출될 프레임을 담을 변수
-    cv::Mat frame_to_stream;
+    // 2. 모든 모드에 공통적으로 적용될 프레임 생성
+    cv::Mat processed_frame = original_frame.clone();
 
-    // 2. 모드에 따라 처리할 프레임을 결정합니다.
-    if (active_mode == "raw") {
-        // "raw" 모드일 경우, 원본 프레임을 그대로 사용합니다.
-        frame_to_stream = original_frame;
-    } else {
-        // 다른 모드("detect", "blur", "stop")일 경우, 복사본으로 처리합니다.
-        cv::Mat processed_frame = original_frame.clone();
+    // 3. 공통 이미지 처리 필터 적용
+    // 3-1. 기본 가우시안 블러 (항상 적용)
+    cv::GaussianBlur(processed_frame, processed_frame, cv::Size(gaussian_blur_kernel_size_, gaussian_blur_kernel_size_), 0);
 
-        if (active_mode == "detect" && detector_) {
-            auto results = detector_->detect(processed_frame, 0.4, 0.45);
+    // 3-2. 클라이언트가 조절한 밝기 적용 (항상 적용)
+    {
+        std::lock_guard<std::mutex> lock(image_processing_settings_mutex_);
+        if (brightness_beta_ != 0) {
+            // alpha(대비)는 1.0으로 고정하고 beta(밝기)만 조절합니다.
+            processed_frame.convertTo(processed_frame, -1, 1.0, brightness_beta_);
+        }
+    }
 
-            int person_count = 0, helmet_count = 0, vest_count = 0;
-            const auto& class_names = detector_->get_class_names();
-            for (const auto& res : results) {
-                if (res.class_id < class_names.size()) {
-                    const std::string& class_name = class_names[res.class_id];
-                    if (class_name == "person") person_count++;
-                    else if (class_name == "helmet") helmet_count++;
-                    else if (class_name == "safety-vest") vest_count++;
-                }
+    // 4. 모드별 특화 처리 (AI 탐지 및 그리기)
+    //    이제 모든 모드는 이미 필터가 적용된 'processed_frame'을 사용합니다.
+    if (active_mode == "detect" && detector_) {
+        auto results = detector_->detect(processed_frame, 0.4, 0.45);
+
+        int person_count = 0, helmet_count = 0, vest_count = 0;
+        const auto& class_names = detector_->get_class_names();
+        for (const auto& res : results) {
+            if (res.class_id < class_names.size()) {
+                const std::string& class_name = class_names[res.class_id];
+                if (class_name == "person") person_count++;
+                else if (class_name == "helmet") helmet_count++;
+                else if (class_name == "safety-vest") vest_count++;
             }
+        }
 
-            bool is_unsafe = (helmet_count < person_count || vest_count < person_count);
+        bool is_unsafe = (helmet_count < person_count || vest_count < person_count);
 
             // 음성 안내
-            if (is_unsafe) {
-                if (!audio_notifier.isPlaying()) {
-                    bool only_helmet_missing = (helmet_count < person_count) && (vest_count >= person_count);
-                    bool only_vest_missing = (vest_count < person_count) && (helmet_count >= person_count);
+        if (is_unsafe) {
+            if (!audio_notifier_.isPlaying()) {
+                bool only_helmet_missing = (helmet_count < person_count) && (vest_count >= person_count);
+                bool only_vest_missing = (vest_count < person_count) && (helmet_count >= person_count);
 
-                    if (only_helmet_missing) {
-                        std::cout << "[INFO] Playing sound: helmet_ment.wav" << std::endl;
-                        audio_notifier.play("sounds/helmet_ment.wav");
-                    } else if (only_vest_missing) {
-                        std::cout << "[INFO] Playing sound: vest_ment.wav" << std::endl;
-                        audio_notifier.play("sounds/vest_ment.wav");
-                    } else {
-                        std::cout << "[INFO] Playing sound: safety_ment.wav" << std::endl;
-                        audio_notifier.play("sounds/safety_ment.wav");
-                    }
+                if (only_helmet_missing) {
+                    std::cout << "[INFO] Playing sound: helmet_ment.wav" << std::endl;
+                    audio_notifier_.play("sounds/helmet_ment.wav");
+                } else if (only_vest_missing) {
+                    std::cout << "[INFO] Playing sound: vest_ment.wav" << std::endl;
+                    audio_notifier_.play("sounds/vest_ment.wav");
+                } else {
+                    std::cout << "[INFO] Playing sound: safety_ment.wav" << std::endl;
+                    audio_notifier_.play("sounds/safety_ment.wav");
                 }
             }
+        }
 
-            // STM32 신호 전송
-            if (is_unsafe && serial_comm_ && serial_comm_->isOpen()) {
-                uint8_t seq = serial_comm_->getNextSeq();
-                auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
-                // 응답을 기다리지 않는 sendOnly로 변경하는 것을 고려해볼 수 있습니다.
-                serial_comm_->sendAndReceive(frame_to_send, "Sent TOGGLE (seq=" + std::to_string(seq) + ")");
-            }
+        // STM32 신호 전송
+        if (is_unsafe && serial_comm_ && serial_comm_->isOpen()) {
+            uint8_t seq = serial_comm_->getNextSeq();
+            auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
+            // 응답을 기다리지 않는 sendOnly로 변경하는 것을 고려해볼 수 있습니다.
+            serial_comm_->sendAndReceive(frame_to_send, "Sent TOGGLE (seq=" + std::to_string(seq) + ")");
+        }
 
-            // 탐지 결과 그리기
-            for (const auto& res : results) {
-                if (res.class_id < class_names.size()) {
-                    std::string class_name = class_names[res.class_id];
-                    cv::Scalar color = color_map_.count(class_name) ? color_map_[class_name] : cv::Scalar(0, 0, 255);
+        // 탐지 결과 그리기
+        for (const auto& res : results) {
+            if (res.class_id < class_names.size()) {
+                std::string class_name = class_names[res.class_id];
+                cv::Scalar color = color_map_.count(class_name) ? color_map_[class_name] : cv::Scalar(0, 0, 255);
                     
-                    // 사각형 그리기
-                    cv::rectangle(processed_frame, res.box, color, 2);
+                // 사각형 그리기
+                cv::rectangle(processed_frame, res.box, color, 2);
 
-                    // 텍스트 그리기 로직 
-                    std::stringstream label_ss;
-                    label_ss << class_name << " " << std::fixed << std::setprecision(2) << res.confidence;
-                    std::string label = label_ss.str();
+                // 텍스트 그리기 로직 
+                std::stringstream label_ss;
+                label_ss << class_name << " " << std::fixed << std::setprecision(2) << res.confidence;
+                std::string label = label_ss.str();
                     
-                    int baseLine;
-                    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+                int baseLine;
+                cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
 
-                    int text_y = res.box.y - 10;
-                    if (text_y < label_size.height) {
-                        text_y = res.box.y + label_size.height + 10;
-                    }
-
-                    cv::rectangle(processed_frame, 
-                                cv::Point(res.box.x, text_y - label_size.height - 5),
-                                cv::Point(res.box.x + label_size.width, text_y + baseLine - 5),
-                                color, -1);
-                    cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5), 
-                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                int text_y = res.box.y - 10;
+                if (text_y < label_size.height) {
+                    text_y = res.box.y + label_size.height + 10;
                 }
+
+                cv::rectangle(processed_frame, 
+                            cv::Point(res.box.x, text_y - label_size.height - 5),
+                            cv::Point(res.box.x + label_size.width, text_y + baseLine - 5),
+                            color, -1);
+                cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5), 
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
             }
+        }
 
 
             // DB 저장
-            if (time(0) - last_save_time_ >= 3) {
-                auto saved_data = db_manager_.saveDetectionLog(camera_id_, results, processed_frame, *detector_);
-                if (detection_callback_ && saved_data.has_value()) {
-                    detection_callback_(saved_data.value());
-                }
-                last_save_time_ = time(0);
+        if (time(0) - last_save_time_ >= 3) {
+            auto saved_data = db_manager_.saveDetectionLog(camera_id_, results, processed_frame, *detector_);
+            if (detection_callback_ && saved_data.has_value()) {
+                detection_callback_(saved_data.value());
             }
-
-        } else if (active_mode == "trespass" && detector_) {
-            auto results = detector_->detect(processed_frame, 0.4, 0.45);
+            last_save_time_ = time(0);
+        }
+    } else if (active_mode == "trespass" && detector_) {
+        auto results = detector_->detect(processed_frame, 0.4, 0.45);
             
-            int person_count = 0;
-            const auto& class_names = detector_->get_class_names();
-            for (const auto& res : results) {
-                if (res.class_id < class_names.size() && class_names[res.class_id] == "person") {
-                    person_count++;
-                }
+        int person_count = 0;
+        const auto& class_names = detector_->get_class_names();
+        for (const auto& res : results) {
+            if (res.class_id < class_names.size() && class_names[res.class_id] == "person") {
+                person_count++;
             }
+        }
             
-            bool trespass_detected = (person_count > 0);
+        bool trespass_detected = (person_count > 0);
 
-            if (trespass_detected && serial_comm_ && serial_comm_->isOpen()) {
-                uint8_t seq = serial_comm_->getNextSeq();
-                auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
-                // 응답을 기다리지 않는 sendOnly로 변경하는 것을 고려해볼 수 있습니다.
-                serial_comm_->sendAndReceive(frame_to_send, "Sent TOGGLE (seq=" + std::to_string(seq) + ")");
-            }
+        if (trespass_detected && serial_comm_ && serial_comm_->isOpen()) {
+            uint8_t seq = serial_comm_->getNextSeq();
+            auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
+            // 응답을 기다리지 않는 sendOnly로 변경하는 것을 고려해볼 수 있습니다.
+            serial_comm_->sendAndReceive(frame_to_send, "Sent TOGGLE (seq=" + std::to_string(seq) + ")");
+        }
             
-            // 결과 그리기 (person만 빨간색으로)
-            for (const auto& res : results) {
-                if (res.class_id < class_names.size() && class_names[res.class_id] == "person") {
-                    cv::rectangle(processed_frame, res.box, cv::Scalar(0, 0, 255), 2);
-                    // 1. 표시할 라벨 생성 ("person" + 신뢰도 점수)
-                    std::string label = "person " + cv::format("%.2f", res.confidence);
-                    cv::Scalar color = cv::Scalar(0, 0, 255); // 빨간색
+        // 결과 그리기 (person만 빨간색으로)
+        for (const auto& res : results) {
+            if (res.class_id < class_names.size() && class_names[res.class_id] == "person") {
+                cv::rectangle(processed_frame, res.box, cv::Scalar(0, 0, 255), 2);
+                // 1. 표시할 라벨 생성 ("person" + 신뢰도 점수)
+                std::string label = "person " + cv::format("%.2f", res.confidence);
+                cv::Scalar color = cv::Scalar(0, 0, 255); // 빨간색
 
-                    // 2. 텍스트 배경을 위한 설정
-                    int baseLine;
-                    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
-                    int text_y = res.box.y - 10;
-                    if (text_y < label_size.height) {
-                        text_y = res.box.y + res.box.height + label_size.height + 5;
-                    }
-
-                    // 3. 텍스트 배경 사각형 그리기
-                    cv::rectangle(processed_frame,
-                                cv::Point(res.box.x, text_y - label_size.height - 5),
-                                cv::Point(res.box.x + label_size.width, text_y + baseLine - 5),
-                                color, -1);
-
-                    // 4. 실제 텍스트 그리기
-                    cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5),
-                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+                // 2. 텍스트 배경을 위한 설정
+                int baseLine;
+                cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+                int text_y = res.box.y - 10;
+                if (text_y < label_size.height) {
+                    text_y = res.box.y + res.box.height + label_size.height + 5;
                 }
+
+                // 3. 텍스트 배경 사각형 그리기
+                cv::rectangle(processed_frame,
+                            cv::Point(res.box.x, text_y - label_size.height - 5),
+                            cv::Point(res.box.x + label_size.width, text_y + baseLine - 5),
+                            color, -1);
+
+                // 4. 실제 텍스트 그리기
+                cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
             }
+        }
 
             // DB 저장 및 웹소켓 알림
-            if (time(0) - last_save_time_ >= 3) {
-                if (trespass_detected) {
-                    auto saved_data = db_manager_.saveTrespassLog(camera_id_, person_count, processed_frame);
-                    if (trespass_callback_ && saved_data.has_value()) {
-                        trespass_callback_(saved_data.value());
-                    }
-                }
-                last_save_time_ = time(0);
-            }
-
-        } else if (active_mode == "fall" && fall_) {
-            // 1. 넘어짐 탐지 실행
-            auto results = fall_->detect(processed_frame, 0.4, 0.45);
-    
-            // 2. 넘어짐 상황 판단
-            bool fall_detected = false;
-            const auto& class_names = fall_->get_class_names();
-            for (const auto& res : results) {
-                if (res.class_id < class_names.size()) {
-                    if (class_names[res.class_id] == "fall") {
-                        fall_detected = true;
-                        break; // 한 명이라도 넘어지면 즉시 알림
-                    }
+        if (time(0) - last_save_time_ >= 3) {
+            if (trespass_detected) {
+                auto saved_data = db_manager_.saveTrespassLog(camera_id_, person_count, processed_frame);
+                if (trespass_callback_ && saved_data.has_value()) {
+                    trespass_callback_(saved_data.value());
                 }
             }
-    
-            // 3. 넘어짐 발생 시 음성 안내 및 STM32 신호 전송
-            if (fall_detected) {
-                if (!audio_notifier.isPlaying()) {
-                    audio_notifier.play("sounds/fall_ment.wav");
-                    std::cout << "[INFO] Playing sound: fall_ment.wav" << std::endl;
-                }
-                if (serial_comm_ && serial_comm_->isOpen()) {
-                    uint8_t seq = serial_comm_->getNextSeq();
-                    auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
-                    serial_comm_->sendAndReceive(frame_to_send, "Sent FALL ALERT");
-                }
-            }
-
-            // 4. DB 저장 (필요 시 구현, 여기서는 예시로 넘어짐 카운트만 저장)
-            if (time(0) - last_save_time_ >= 3) {
-                if(fall_detected) {
-                    auto saved_data = db_manager_.saveFallLog(camera_id_, fall_detected);
-                    if (fall_callback_ && saved_data.has_value()) {
-                        fall_callback_(saved_data.value());
-                    }
-                }
-                last_save_time_ = time(0);
-            }
-            
-            // 5. 탐지 결과를 display_frame에 그리기
-            for (const auto& res : results) {
-                if (res.class_id < class_names.size()) {
-                    std::string class_name = class_names[res.class_id];
-                    cv::Scalar color = color_map_.count(class_name) ? color_map_[class_name] : cv::Scalar(255, 255, 255);
-                    
-                    cv::rectangle(processed_frame, res.box, color, 2);
-                    std::string label = class_name + " " + cv::format("%.2f", res.confidence);
-                    
-                    int baseLine;
-                    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
-                    int text_y = res.box.y - 10;
-                    if (text_y < label_size.height) {
-                        text_y = res.box.y + label_size.height + 10;
-                    }
-                    cv::rectangle(processed_frame, cv::Point(res.box.x, text_y - label_size.height - 5), cv::Point(res.box.x + label_size.width, text_y + baseLine), color, -1);
-                    cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
-                }
-            }
-    
-        } else if (active_mode == "blur" && segmenter_) {
-            SegmentationResult seg_result = segmenter_->process_frame(processed_frame);
-            int blur_count = seg_result.person_count;
-
-            if (time(0) - last_save_time_ >= 3) {
-                if(blur_count > 0) {
-                    auto saved_data = db_manager_.saveBlurLog(camera_id_, blur_count);
-                    if (blur_callback_ && saved_data.has_value()) {
-                        blur_callback_(saved_data.value());
-                    }
-                }
-                last_save_time_ = time(0);
-            }
-
-        } else if (active_mode == "stop") {
-            cv::putText(processed_frame, "STOPPED", cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+            last_save_time_ = time(0);
         }
-        
-        // 처리된 프레임을 송출할 프레임으로 지정합니다.
-        frame_to_stream = processed_frame;
-    }
+    } else if (active_mode == "fall" && fall_) {
+        // 1. 넘어짐 탐지 실행
+        auto results = fall_->detect(processed_frame, 0.4, 0.45);
+    
+        // 2. 넘어짐 상황 판단
+        bool fall_detected = false;
+        const auto& class_names = fall_->get_class_names();
+        for (const auto& res : results) {
+            if (res.class_id < class_names.size()) {
+                if (class_names[res.class_id] == "fall") {
+                    fall_detected = true;
+                    break; // 한 명이라도 넘어지면 즉시 알림
+                }
+            }
+        }
+    
+        // 3. 넘어짐 발생 시 음성 안내 및 STM32 신호 전송
+        if (fall_detected) {
+            if (!audio_notifier_.isPlaying()) {
+                audio_notifier_.play("sounds/fall_ment.wav");
+                std::cout << "[INFO] Playing sound: fall_ment.wav" << std::endl;
+            }
+            if (serial_comm_ && serial_comm_->isOpen()) {
+                uint8_t seq = serial_comm_->getNextSeq();
+                auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
+                serial_comm_->sendAndReceive(frame_to_send, "Sent FALL ALERT");
+            }
+        }
 
-    // 3. 최종 프레임에 공통 상태 정보를 그리고 스트리밍합니다.
-    if (!frame_to_stream.empty()) {
-        cv::putText(frame_to_stream, "MODE: " + active_mode, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
+        // 4. DB 저장 (필요 시 구현, 여기서는 예시로 넘어짐 카운트만 저장)
+        if (time(0) - last_save_time_ >= 3) {
+            if(fall_detected) {
+                auto saved_data = db_manager_.saveFallLog(camera_id_, fall_detected);
+                if (fall_callback_ && saved_data.has_value()) {
+                    fall_callback_(saved_data.value());
+                }
+            }
+            last_save_time_ = time(0);
+        }
+            
+        // 5. 탐지 결과를 display_frame에 그리기
+        for (const auto& res : results) {
+            if (res.class_id < class_names.size()) {
+                std::string class_name = class_names[res.class_id];
+                cv::Scalar color = color_map_.count(class_name) ? color_map_[class_name] : cv::Scalar(255, 255, 255);
+                    
+                cv::rectangle(processed_frame, res.box, color, 2);
+                std::string label = class_name + " " + cv::format("%.2f", res.confidence);
+                
+                int baseLine;
+                cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+                int text_y = res.box.y - 10;
+                if (text_y < label_size.height) {
+                    text_y = res.box.y + label_size.height + 10;
+                }
+                cv::rectangle(processed_frame, cv::Point(res.box.x, text_y - label_size.height - 5), cv::Point(res.box.x + label_size.width, text_y + baseLine), color, -1);
+                cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+            }
+        }
+    } else if (active_mode == "blur" && segmenter_) {
+        SegmentationResult seg_result = segmenter_->process_frame(processed_frame);
+        int blur_count = seg_result.person_count;
+
+        if (time(0) - last_save_time_ >= 3) {
+            if(blur_count > 0) {
+                auto saved_data = db_manager_.saveBlurLog(camera_id_, blur_count);
+                if (blur_callback_ && saved_data.has_value()) {
+                    blur_callback_(saved_data.value());
+                }
+            }
+            last_save_time_ = time(0);
+        }
+    } else if (active_mode == "stop") {
+        cv::putText(processed_frame, "STOPPED", cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+    }
+    // "raw" 모드일 경우, 위 if-else 문을 모두 건너뛰고 필터만 적용된 processed_frame이 남게 됩니다.
+
+    // 5. 최종 프레임에 공통 상태 정보를 그리고 스트리밍합니다.
+    if (!processed_frame.empty()) {
+        cv::putText(processed_frame, "MODE: " + active_mode, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
         if (anomaly_detected_.load()) {
-            cv::putText(frame_to_stream, "ANOMALY DETECTED!", cv::Point(10, 90), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+            cv::putText(processed_frame, "ANOMALY DETECTED!", cv::Point(10, 90), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
         }
 
         if (proc_processed_) {
-            fwrite(frame_to_stream.data, 1, frame_to_stream.total() * frame_to_stream.elemSize(), proc_processed_);
+            fwrite(processed_frame.data, 1, processed_frame.total() * processed_frame.elemSize(), proc_processed_);
         }
     }
 }

@@ -7,6 +7,7 @@
 #include <map>
 #include <cstdio> // FILE*
 #include <functional>
+#include <mutex>
 #include "AudioNotifier.h"
 
 // 클래스 전방 선언 (순환 참조 방지)
@@ -41,6 +42,8 @@ public:
     void onNewFall(std::function<void(const FallCountData&)> callback);
     void onNewTrespass(std::function<void(const TrespassLogData&)> callback);
 
+    void setBrightness(int beta);
+
 private:
     // 초기화 헬퍼 함수
     bool initialize_camera();
@@ -71,6 +74,11 @@ private:
     FILE* proc_processed_ = nullptr;
     std::string rtsp_url_ = "rtsps://127.0.0.1:8555/processed";
 
+    // 이미지 처리 설정 변수 
+    int brightness_beta_;
+    int gaussian_blur_kernel_size_ = 3;
+    std::mutex image_processing_settings_mutex_;
+
     // 모델 관리
     std::unique_ptr<Detector> detector_;
     std::unique_ptr<Segmenter> segmenter_;
@@ -97,5 +105,5 @@ private:
     std::function<void(const TrespassLogData&)> trespass_callback_;
 
     // PPE detect시 스피커 송출 관련 멤버 변수
-    AudioNotifier audio_notifier; 
+    AudioNotifier audio_notifier_; 
 };

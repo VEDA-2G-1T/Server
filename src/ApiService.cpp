@@ -63,6 +63,15 @@ void ApiService::setupRoutes() {
                         conn.send_text(res.dump());
                     }
                 }
+                else if (type == "set_brightness") {
+                // value 키가 있고, 숫자인지 확인
+                if (json_req.contains("value") && json_req["value"].is_number()) {
+                    int brightness_value = json_req["value"].get<int>();
+                    
+                    // StreamProcessor에 새로운 밝기 값 전달
+                    processor_.setBrightness(brightness_value);
+                    }
+                }
             } catch (const std::exception& e) {
                 CROW_LOG_ERROR << "Invalid WebSocket message: " << e.what();
             }
