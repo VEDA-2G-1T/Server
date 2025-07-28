@@ -48,6 +48,9 @@ set(SOURCES
     src/AnomalyDetector.cpp
     src/AudioNotifier.cpp
     src/fall.cpp
+    src/driver/led_pwm/led_controller/led_pwm_controller.cpp
+    src/driver/led_pwm/led_controller/led_fade_manager.cpp
+    src/driver/mic/mic_cotroller/mic_controller.cpp
     ${YOLO_SOURCES}
 )
 
@@ -64,6 +67,8 @@ target_compile_options(pi_server PRIVATE -march=native)
 target_include_directories(pi_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo_backend/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/driver/led_pwm/led_controller
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/driver/mic/mic_cotroller
     ${OpenCV_INCLUDE_DIRS}
     ${SQLite3_INCLUDE_DIRS}
     ${ONNXRUNTIME_DIR}/include

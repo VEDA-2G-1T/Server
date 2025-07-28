@@ -125,14 +125,14 @@ void ApiService::setupRoutes() {
                 tres_array.push_back(tres_obj);
             }
             response_json["status"] = "success";
-            response_json["detections"] = tres_array;
+            response_json["trespass"] = tres_array;
 
             crow::response res(response_json.dump());
             res.set_header("Content-Type", "application/json");
             return res;
         } else {
             response_json["status"] = "error";
-            response_json["message"] = "Failed to fetch detections from database.";
+            response_json["message"] = "Failed to fetch trespass from database.";
             crow::response res(500, response_json.dump());
             res.set_header("Content-Type", "application/json");
             return res;

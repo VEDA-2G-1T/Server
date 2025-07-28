@@ -7,6 +7,7 @@
 #include "SerialCommunicator.h" 
 #include "STM32Protocol.h"    
 #include "AnomalyDetector.h"
+#include "driver/led_pwm/led_controller/led_pwm_controller.h"
 
 #include <iostream>
 #include <thread>
@@ -15,7 +16,7 @@
 #include <termios.h>
 
 // 생성자
-StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbManager), brightness_beta_(0) {
+StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbManager), brightness_beta_(0), led_fade_controller_(LedController::instance(), 3000) {
     color_map_["person"] = cv::Scalar(0, 255, 0);
     color_map_["helmet"] = cv::Scalar(255, 178, 51);
     color_map_["safety-vest"] = cv::Scalar(0, 128, 255);
@@ -123,9 +124,7 @@ void StreamProcessor::handle_anomaly_detection() {
                 
                 if (current_anomaly) {
                     std::cout << "🚨 이상탐지 알림: 부저 및 LED 활성화" << std::endl;
-                } else {
-                    std::cout << "✅ 정상 회복: 부저 및 LED 비활성화" << std::endl;
-                }
+                } 
             }
         }
     }
@@ -177,6 +176,7 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
 
             // 음성 안내
         if (is_unsafe) {
+            led_fade_controller_.triggerFade();
             if (!audio_notifier_.isPlaying()) {
                 bool only_helmet_missing = (helmet_count < person_count) && (vest_count >= person_count);
                 bool only_vest_missing = (vest_count < person_count) && (helmet_count >= person_count);
@@ -255,11 +255,15 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
             
         bool trespass_detected = (person_count > 0);
 
-        if (trespass_detected && serial_comm_ && serial_comm_->isOpen()) {
-            uint8_t seq = serial_comm_->getNextSeq();
-            auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
-            // 응답을 기다리지 않는 sendOnly로 변경하는 것을 고려해볼 수 있습니다.
-            serial_comm_->sendAndReceive(frame_to_send, "Sent TOGGLE (seq=" + std::to_string(seq) + ")");
+        if(trespass_detected) {
+            led_fade_controller_.triggerFade();
+
+            if(serial_comm_ && serial_comm_->isOpen()) {
+                uint8_t seq = serial_comm_->getNextSeq();
+                auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
+                // 응답을 기다리지 않는 sendOnly로 변경하는 것을 고려해볼 수 있습니다.
+                serial_comm_->sendAndReceive(frame_to_send, "Sent TOGGLE (seq=" + std::to_string(seq) + ")");
+            }
         }
             
         // 결과 그리기 (person만 빨간색으로)
@@ -318,6 +322,8 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
     
         // 3. 넘어짐 발생 시 음성 안내 및 STM32 신호 전송
         if (fall_detected) {
+            led_fade_controller_.triggerFade();
+
             if (!audio_notifier_.isPlaying()) {
                 audio_notifier_.play("sounds/fall_ment.wav");
                 std::cout << "[INFO] Playing sound: fall_ment.wav" << std::endl;
@@ -380,9 +386,6 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
     // 5. 최종 프레임에 공통 상태 정보를 그리고 스트리밍합니다.
     if (!processed_frame.empty()) {
         cv::putText(processed_frame, "MODE: " + active_mode, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
-        if (anomaly_detected_.load()) {
-            cv::putText(processed_frame, "ANOMALY DETECTED!", cv::Point(10, 90), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
-        }
 
         if (proc_processed_) {
             fwrite(processed_frame.data, 1, processed_frame.total() * processed_frame.elemSize(), proc_processed_);

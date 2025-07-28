@@ -9,6 +9,7 @@
 #include <functional>
 #include <mutex>
 #include "AudioNotifier.h"
+#include "driver/led_pwm/led_controller/led_fade_manager.h"
 
 // 클래스 전방 선언 (순환 참조 방지)
 class Detector;
@@ -106,4 +107,6 @@ private:
 
     // PPE detect시 스피커 송출 관련 멤버 변수
     AudioNotifier audio_notifier_; 
+
+    DebouncedFadeController led_fade_controller_;
 };

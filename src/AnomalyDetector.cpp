@@ -1,246 +1,110 @@
 #include "AnomalyDetector.h"
 #include <iostream>
-#include <iomanip>
-#include <numeric>
 #include <cmath>
-#include <unistd.h>
-#include <linux/i2c-dev.h>
-#include <sys/ioctl.h>
-#include <fcntl.h>
+#include <numeric>
 #include <stdexcept>
 
-// --- ADS1115 클래스 구현 ---
-ADS1115::ADS1115(const char* bus) {
-    if ((fd = open(bus, O_RDWR)) < 0) {
-        throw std::runtime_error("I2C 버스 열기 실패");
+// 생성자
+AnomalyDetector::AnomalyDetector() : mic_controller_(MicController::getInstance()) {
+    // MicController 디바이스 열기
+    if (!mic_controller_.openDevice()) {
+        // 디바이스 열기 실패 시, 예외를 던져서 객체 생성이 실패했음을 알림
+        throw std::runtime_error("AnomalyDetector: Failed to open mic device (/dev/adc_device).");
     }
-    if (ioctl(fd, I2C_SLAVE, addr) < 0) {
-        throw std::runtime_error("ADS1115 접근 실패");
-    }
+
+    // FFTW3 라이브러리 초기화
+    fft_in_ = (double*)fftw_malloc(sizeof(double) * fft_size_);
+    fft_out_ = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * (fft_size_ / 2 + 1));
+    fft_plan_ = fftw_plan_dft_r2c_1d(fft_size_, fft_in_, fft_out_, FFTW_ESTIMATE);
 }
 
-ADS1115::~ADS1115() {
-    if (fd >= 0) close(fd);
-}
-
-int16_t ADS1115::readRaw(uint8_t ch) {
-    uint8_t cfg[3];
-    cfg[0] = 0x01;
-    cfg[1] = 0b11000011 | ((ch & 3) << 4);
-    cfg[2] = 0b11100011;
-    write(fd, cfg, 3);
-    usleep(1200);
-    uint8_t ptr = 0; 
-    write(fd, &ptr, 1);
-    uint8_t d[2]; 
-    read(fd, d, 2);
-    return (int16_t)((d[0] << 8) | d[1]);
-}
-
-// --- AnomalyDetector 클래스 구현 ---
-AnomalyDetector::AnomalyDetector() {
-    try {
-        adc_ = std::make_unique<ADS1115>();
-        fft_out_ = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * (WIN_SZ / 2 + 1));
-        plan_ = fftw_plan_dft_r2c_1d(WIN_SZ, nullptr, fft_out_, FFTW_ESTIMATE);
-        init_hamming_window();
-    } catch (const std::exception& e) {
-        std::cerr << "ADC 초기화 실패: " << e.what() << std::endl;
-    }
-}
-
+// 소멸자
 AnomalyDetector::~AnomalyDetector() {
-    stop();
-    if (plan_) fftw_destroy_plan(plan_);
-    if (fft_out_) fftw_free(fft_out_);
-}
+    stop(); // 스레드가 실행 중이면 안전하게 종료
 
-void AnomalyDetector::init_hamming_window() {
-    if (hamming_win_.empty()) {
-        hamming_win_.resize(WIN_SZ);
-        for (int i = 0; i < WIN_SZ; ++i) {
-            hamming_win_[i] = 0.54 - 0.46 * cos(2 * M_PI * i / (WIN_SZ - 1));
-        }
-    }
+    // FFTW3 리소스 해제
+    fftw_destroy_plan(fft_plan_);
+    fftw_free(fft_in_);
+    fftw_free(fft_out_);
+
+    // MicController는 프로그램 종료 시 자동으로 소멸자에서 closeDevice()가 호출
 }
 
 void AnomalyDetector::start() {
-    if (!adc_) {
-        std::cerr << "ADC가 초기화되지 않았습니다." << std::endl;
-        return;
-    }
-    
-    if (running_.load()) return;
-    
-    running_ = true;
-    anomaly_detected_ = false;
-    
-    // 캘리브레이션 수행
-    calibrate();
-    
-    // 탐지 스레드 시작
-    detection_thread_ = std::thread(&AnomalyDetector::detection_loop, this);
-    std::cout << "이상탐지 시작됨" << std::endl;
+    if (thread_.joinable()) return; // 이미 시작되었다면 무시
+    stop_flag_ = false;
+    thread_ = std::thread(&AnomalyDetector::run, this);
 }
 
 void AnomalyDetector::stop() {
-    if (!running_.load()) return;
-    
-    running_ = false;
-    if (detection_thread_.joinable()) {
-        detection_thread_.join();
+    stop_flag_ = true;
+    if (thread_.joinable()) {
+        thread_.join();
     }
-    std::cout << "이상탐지 중지됨" << std::endl;
 }
 
-void AnomalyDetector::calibrate() {
-    std::cout << "배경 캘리브레이션 중..." << std::endl;
-    
-    std::vector<double> hf_values, flux_values;
-    std::vector<double> prev_spectrum;
-    
-    std::vector<double> window(WIN_SZ);
-    for (int frame = 0; frame < cali_frames_; ++frame) {
-        for (int i = 0; i < WIN_SZ; ++i) {
-            int16_t raw = adc_->readRaw();
-            double voltage = raw * (4.096 / 32768.0);
-            window[i] = voltage;
-            
-            // 버퍼에 추가
-            {
-                std::lock_guard<std::mutex> lock(buf_mutex_);
-                buf_.push_back(voltage);
-                if (buf_.size() > MAX_BUF_SAMPS) buf_.pop_front();
-            }
-            
-            usleep(1000000 / SAMPLE_RATE);
-        }
-        
-        Feature feat = extract_features(window, prev_spectrum);
-        hf_values.push_back(feat.hf_ratio);
-        flux_values.push_back(feat.flux);
-        
-        // prev_spectrum 갱신
-        int spec_size = WIN_SZ / 2 + 1;
-        prev_spectrum.resize(spec_size);
-        for (int k = 0; k < spec_size; ++k) {
-            prev_spectrum[k] = fft_out_[k][0] * fft_out_[k][0] + fft_out_[k][1] * fft_out_[k][1];
-        }
-    }
-    
-    auto [hf_mean, hf_std] = calculate_stats(hf_values);
-    auto [flux_mean, flux_std] = calculate_stats(flux_values);
-    
-    hf_mean_ = hf_mean;
-    hf_std_ = hf_std;
-    flux_mean_ = flux_mean;
-    flux_std_ = flux_std;
-    
-    std::cout << std::fixed << std::setprecision(4)
-              << "캘리브레이션 완료:\n"
-              << " HF μ=" << hf_mean_ << " σ=" << hf_std_
-              << "\n FL μ=" << flux_mean_ << " σ=" << flux_std_ << std::endl;
+bool AnomalyDetector::isAnomalyDetected() const {
+    return anomaly_detected_.load();
 }
 
-void AnomalyDetector::detection_loop() {
-    std::vector<double> window(WIN_SZ), current_spectrum;
-    std::vector<double> prev_spectrum;
-    int consecutive_anomalies = 0;
-    
-    while (running_.load()) {
-        for (int i = 0; i < WIN_SZ; ++i) {
-            if (!running_.load()) break;
-            
-            int16_t raw = adc_->readRaw();
-            double voltage = raw * (4.096 / 32768.0);
-            window[i] = voltage;
-            
-            // 버퍼에 추가
-            {
-                std::lock_guard<std::mutex> lock(buf_mutex_);
-                buf_.push_back(voltage);
-                if (buf_.size() > MAX_BUF_SAMPS) buf_.pop_front();
-            }
-            
-            usleep(1000000 / SAMPLE_RATE);
-        }
-        
-        Feature feat = extract_features(window, prev_spectrum);
-        
-        // prev_spectrum 갱신
-        int spec_size = WIN_SZ / 2 + 1;
-        current_spectrum.resize(spec_size);
-        for (int k = 0; k < spec_size; ++k) {
-            current_spectrum[k] = fft_out_[k][0] * fft_out_[k][0] + fft_out_[k][1] * fft_out_[k][1];
-        }
-        prev_spectrum.swap(current_spectrum);
-        
-        // Z-score 계산
-        double z_hf = (feat.hf_ratio - hf_mean_) / (hf_std_ > 0 ? hf_std_ : 1.0);
-        double z_flux = (feat.flux - flux_mean_) / (flux_std_ > 0 ? flux_std_ : 1.0);
-        
-        bool anomaly = (z_hf > z_threshold_ && z_flux > z_threshold_);
-        
-        if (anomaly) {
-            if (++consecutive_anomalies >= 3) {
-                anomaly_detected_ = true;
-                std::cout << "\n🚨 ANOMALY DETECTED! zHF=" << z_hf << " zFL=" << z_flux << std::endl;
+// 이상 탐지를 실행하는 메인 루프 (별도 스레드에서 실행)
+void AnomalyDetector::run() {
+    std::vector<double> audio_buffer;
+    audio_buffer.reserve(fft_size_);
+
+    while (!stop_flag_) {
+        int16_t raw_value;
+        // MicController를 통해 ADC raw 값을 읽어옴
+        if (mic_controller_.readRaw(raw_value)) {
+            audio_buffer.push_back(static_cast<double>(raw_value));
+
+            // 버퍼가 FFT 분석에 필요한 만큼 채워졌는지 확인합니다.
+            if (audio_buffer.size() >= fft_size_) {
+                // 1. FFT 입력 버퍼에 데이터 복사
+                for (int i = 0; i < fft_size_; ++i) {
+                    fft_in_[i] = audio_buffer[i];
+                }
+
+                // 2. FFT 실행
+                fftw_execute(fft_plan_);
+
+                // 3. 주파수 대역별 에너지 계산 (예시: 1kHz ~ 2kHz 대역)
+                double target_energy = 0.0;
+                // 실제 주파수 계산: freq = i * (sample_rate / fft_size)
+                // 예시에서는 특정 인덱스 범위의 에너지를 계산
+                for (int i = 100; i < 200; ++i) { 
+                    double real = fft_out_[i][0];
+                    double imag = fft_out_[i][1];
+                    target_energy += (real * real + imag * imag);
+                }
+
+                // 4. 임계값 기반으로 이상 상태 판단
+                const double ANOMALY_THRESHOLD = 0.0005; // ★★★ 실제 환경에서 테스트하며 조절해야 함
+                if (target_energy > ANOMALY_THRESHOLD) {
+                    anomaly_detected_ = true;
+                    std::cout << "[ANOMALY] High energy detected in target frequency band!" << std::endl;
+                } else {
+                    anomaly_detected_ = false;
+                }
+                
+                // 다음 분석을 위해 버퍼를 비움
+                audio_buffer.clear();
             }
         } else {
-            if (consecutive_anomalies >= 3) {
-                std::cout << "<<< 정상 회복" << std::endl;
-                anomaly_detected_ = false;
-            }
-            consecutive_anomalies = 0;
+            // 읽기 실패 시 잠시 대기
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        
-        std::cout << "\rHF:" << feat.hf_ratio << "/" << hf_mean_
-                  << " FL:" << feat.flux << "/" << flux_mean_ << "    " << std::flush;
     }
 }
 
-AnomalyDetector::Feature AnomalyDetector::extract_features(const std::vector<double>& window, const std::vector<double>& prev_spectrum) {
-    init_hamming_window();
-    
-    static std::vector<double> input;
-    input.resize(WIN_SZ);
-    for (int i = 0; i < WIN_SZ; ++i) {
-        input[i] = window[i] * hamming_win_[i];
-    }
-    
-    fftw_execute_dft_r2c(plan_, input.data(), fft_out_);
-    
-    int spec_size = WIN_SZ / 2 + 1;
-    double total_energy = 0, hf_energy = 0;
-    int hf_bin = int(HF_CUTOFF * WIN_SZ / SAMPLE_RATE);
-    
-    std::vector<double> power(spec_size);
-    for (int k = 0; k < spec_size; ++k) {
-        double magnitude = std::hypot(fft_out_[k][0], fft_out_[k][1]);
-        double p = magnitude * magnitude;
-        power[k] = p;
-        total_energy += p;
-        if (k >= hf_bin) hf_energy += p;
-    }
-    
-    double hf_ratio = (total_energy > 0 ? hf_energy / total_energy : 0);
-    double flux = 0;
-    
-    if (prev_spectrum.size() == spec_size) {
-        for (int k = 0; k < spec_size; ++k) {
-            double diff = power[k] - prev_spectrum[k];
-            if (diff > 0) flux += diff;
-        }
-    }
-    
-    return {hf_ratio, flux};
-}
-
+// (이 함수는 현재 run() 루프에서 직접 사용되지는 않지만, 다른 분석을 위해 남겨둠)
 std::pair<double, double> AnomalyDetector::calculate_stats(const std::vector<double>& values) {
-    double mean = std::accumulate(values.begin(), values.end(), 0.0) / values.size();
-    double variance = 0;
-    for (double x : values) {
-        variance += (x - mean) * (x - mean);
+    if (values.empty()) {
+        return {0.0, 0.0};
     }
-    return {mean, std::sqrt(variance / values.size())};
-} 
+    double sum = std::accumulate(values.begin(), values.end(), 0.0);
+    double mean = sum / values.size();
+    double sq_sum = std::inner_product(values.begin(), values.end(), values.begin(), 0.0);
+    double std_dev = std::sqrt(sq_sum / values.size() - mean * mean);
+    return {mean, std_dev};
+}
