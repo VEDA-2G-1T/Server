@@ -138,6 +138,35 @@ void ApiService::setupRoutes() {
             return res;
         }
     });
+
+    CROW_ROUTE(app_, "/api/fall")([this] {
+        std::vector<FallCountData> results;
+        nlohmann::json response_json;
+
+        if (dbManager_.getFallLogs(results)) {
+            nlohmann::json logs_array = nlohmann::json::array();
+            for (const auto& log : results) {
+                nlohmann::json log_obj;
+                log_obj["camera_id"] = log.camera_id;
+                log_obj["timestamp"] = log.timestamp;
+                log_obj["count"] = log.count;
+                log_obj["image_path"] = log.image_path; 
+                logs_array.push_back(log_obj);
+            }
+            response_json["status"] = "success";
+            response_json["fall"] = logs_array;
+
+            crow::response res(response_json.dump());
+            res.set_header("Content-Type", "application/json");
+            return res;
+        } else {
+            response_json["status"] = "error";
+            response_json["message"] = "Failed to fetch fall from database.";
+            crow::response res(500, response_json.dump());
+            res.set_header("Content-Type", "application/json");
+            return res;
+        }
+    });
 }
 
 // 웹소켓 broadcast
@@ -194,6 +223,7 @@ void ApiService::broadcastNewFall(const FallCountData& data) {
     msg["data"]["camera_id"] = data.camera_id;
     msg["data"]["timestamp"] = data.timestamp;
     msg["data"]["count"] = data.count;
+    msg["data"]["image_path"] = data.image_path;
 
     std::lock_guard<std::mutex> _(mtx_);
     for (auto user : ws_users_) {

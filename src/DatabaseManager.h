@@ -23,7 +23,7 @@ public:
 
     std::optional<DetectionData> saveDetectionLog(int camera_id, const std::vector<DetectionResult>& results, const cv::Mat& frame, Detector& detector);
     std::optional<PersonCountData> saveBlurLog(int camera_id, int person_count);
-    std::optional<FallCountData> saveFallLog(int camera_id, int fall_count);
+    std::optional<FallCountData> saveFallLog(int camera_id, int fall_count, const cv::Mat& frame);
     std::optional<TrespassLogData> saveTrespassLog(int camera_id, int person_count, const cv::Mat& frame);
 
 private:

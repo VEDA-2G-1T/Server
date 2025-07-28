@@ -99,33 +99,22 @@ void StreamProcessor::handle_anomaly_detection() {
         
         if (anomaly_detector_) {
             bool current_anomaly = anomaly_detector_->isAnomalyDetected();
-            // 이상탐지 상태가 변경되었을 때만 STM32에 신호 전송
-            if (current_anomaly != anomaly_detected_.load()) {
-                anomaly_detected_ = current_anomaly;
 
-                // 등록된 콜백이 있으면 호출 
-                if (anomaly_callback_) {
-                anomaly_callback_(current_anomaly);
-                }
+            // [핵심] 이전에 정상이였다가(false) 지금 이상이 감지된(true) 첫 순간에만 실행
+            if (current_anomaly && !anomaly_detected_.load()) {
                 
+                std::cout << "🚨 이상탐지! 알람을 1회 울립니다." << std::endl;
+
                 if (serial_comm_ && serial_comm_->isOpen()) {
-                uint8_t seq = serial_comm_->getNextSeq();
-                auto frame_to_send = STM32Protocol::buildToggleFrame(seq);
-
-                uint8_t seq_sent = frame_to_send[3];
-                std::string log_msg = "Sent TOGGLE (seq=" + std::to_string(seq_sent) + ")";
-                
-                auto response = serial_comm_->sendAndReceive(frame_to_send, log_msg);
-    
-                if (response && response->cmd == STM32Protocol::CMD_TOGGLE && response->type == STM32Protocol::TYPE_RSP && response->seq == seq_sent) {
-                     std::cout << "[RX] TOGGLE ACK (seq=" << (int)response->seq << ")" << std::endl;
+                    // --- 1. 알람을 켜기 위해 첫 번째 TOGGLE 신호 전송 ---
+                    uint8_t seq1 = serial_comm_->getNextSeq();
+                    auto frame_on = STM32Protocol::buildToggleFrame(seq1);
+                    serial_comm_->sendAndReceive(frame_on, "Sent TOGGLE (ON)");
                 }
-                }
-                
-                if (current_anomaly) {
-                    std::cout << "🚨 이상탐지 알림: 부저 및 LED 활성화" << std::endl;
-                } 
             }
+
+            // 현재 상태를 마지막으로 업데이트
+            anomaly_detected_ = current_anomaly;
         }
     }
 }
@@ -334,19 +323,8 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
                 serial_comm_->sendAndReceive(frame_to_send, "Sent FALL ALERT");
             }
         }
-
-        // 4. DB 저장 (필요 시 구현, 여기서는 예시로 넘어짐 카운트만 저장)
-        if (time(0) - last_save_time_ >= 3) {
-            if(fall_detected) {
-                auto saved_data = db_manager_.saveFallLog(camera_id_, fall_detected);
-                if (fall_callback_ && saved_data.has_value()) {
-                    fall_callback_(saved_data.value());
-                }
-            }
-            last_save_time_ = time(0);
-        }
             
-        // 5. 탐지 결과를 display_frame에 그리기
+        // 4. 탐지 결과를 display_frame에 그리기
         for (const auto& res : results) {
             if (res.class_id < class_names.size()) {
                 std::string class_name = class_names[res.class_id];
@@ -365,6 +343,18 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
                 cv::putText(processed_frame, label, cv::Point(res.box.x, text_y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
             }
         }
+
+        // 5. DB 저장 (필요 시 구현, 여기서는 예시로 넘어짐 카운트만 저장)
+        if (time(0) - last_save_time_ >= 3) {
+            if(fall_detected) {
+                auto saved_data = db_manager_.saveFallLog(camera_id_, fall_detected, processed_frame);
+                if (fall_callback_ && saved_data.has_value()) {
+                    fall_callback_(saved_data.value());
+                }
+            }
+            last_save_time_ = time (0);
+        }
+
     } else if (active_mode == "blur" && segmenter_) {
         SegmentationResult seg_result = segmenter_->process_frame(processed_frame);
         int blur_count = seg_result.person_count;

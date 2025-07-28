@@ -40,7 +40,9 @@ void DatabaseManager::initDatabases() {
         // 테이블 이름을 'fall_counts'로 지정
         const char* sql = "CREATE TABLE IF NOT EXISTS fall_counts ("
                           "camera_id INTEGER NOT NULL, "
-                          "timestamp TEXT NOT NULL, count INTEGER NOT NULL);";
+                          "timestamp TEXT NOT NULL, "
+                          "count INTEGER NOT NULL, "
+                          "image_path TEXT);";
         sqlite3_exec(db, sql, 0, 0, 0);
         sqlite3_close(db);
     }
@@ -205,19 +207,26 @@ bool DatabaseManager::getAllDetections(std::vector<DetectionData>& detections) {
     return true;
 }
 
-std::optional<FallCountData> DatabaseManager::saveFallLog(int camera_id, int fall_count) {
+std::optional<FallCountData> DatabaseManager::saveFallLog(int camera_id, int fall_count, const cv::Mat& frame) {
+    std::string timestamp_str = get_current_timestamp();
+    std::string timestamp_file = timestamp_str;
+    std::replace(timestamp_file.begin(), timestamp_file.end(), ':', '-');
+    std::replace(timestamp_file.begin(), timestamp_file.end(), ' ', '_');
+    std::string image_path = image_save_dir_ + "/" + timestamp_file + "_fall.jpg";
+    cv::imwrite(image_path, frame);
+
     sqlite3* db;
     if (sqlite3_open(fall_db_path_.c_str(), &db) != SQLITE_OK) {
         return std::nullopt;
     }
 
-    std::string timestamp_str = get_current_timestamp();
-    const char* sql = "INSERT INTO fall_counts (camera_id, timestamp, count) VALUES(?,?,?);";
+    const char* sql = "INSERT INTO fall_counts (camera_id, timestamp, count, image_path) VALUES(?,?,?,?);";
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
         sqlite3_bind_int(stmt, 1, camera_id);
         sqlite3_bind_text(stmt, 2, timestamp_str.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int(stmt, 3, fall_count);
+        sqlite3_bind_text(stmt, 4, image_path.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_step(stmt);
     }
     sqlite3_finalize(stmt);
@@ -227,6 +236,7 @@ std::optional<FallCountData> DatabaseManager::saveFallLog(int camera_id, int fal
     data.camera_id = camera_id;
     data.timestamp = timestamp_str;
     data.count = fall_count;
+    data.image_path = image_path;
     return data;
 }
 
@@ -279,6 +289,33 @@ bool DatabaseManager::getTrespassLogs(std::vector<TrespassLogData>& logs) {
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         TrespassLogData data;
+        data.camera_id = sqlite3_column_int(stmt, 0);
+        const char* ts = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        data.timestamp = ts ? ts : "";
+        data.count = sqlite3_column_int(stmt, 2);
+        const char* img_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        data.image_path = img_path ? img_path : "";
+        logs.push_back(data);
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return true;
+}
+
+bool DatabaseManager::getFallLogs(std::vector<FallCountData>& logs) {
+    sqlite3* db;
+    if (sqlite3_open(fall_db_path_.c_str(), &db) != SQLITE_OK) return false;
+
+    const char* sql = "SELECT camera_id, timestamp, count, image_path FROM fall_counts ORDER BY timestamp DESC;";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        sqlite3_close(db);
+        return false;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        FallCountData data;
         data.camera_id = sqlite3_column_int(stmt, 0);
         const char* ts = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
         data.timestamp = ts ? ts : "";

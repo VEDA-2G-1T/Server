@@ -79,7 +79,7 @@ void AnomalyDetector::run() {
                 }
 
                 // 4. 임계값 기반으로 이상 상태 판단
-                const double ANOMALY_THRESHOLD = 0.0005; // ★★★ 실제 환경에서 테스트하며 조절해야 함
+                const double ANOMALY_THRESHOLD = 800000000; // ★★★ 실제 환경에서 테스트하며 조절해야 함
                 if (target_energy > ANOMALY_THRESHOLD) {
                     anomaly_detected_ = true;
                     std::cout << "[ANOMALY] High energy detected in target frequency band!" << std::endl;
