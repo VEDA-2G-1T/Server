@@ -16,7 +16,7 @@
 #include <termios.h>
 
 // 생성자
-StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbManager), brightness_beta_(0), led_fade_controller_(LedController::instance(), 3000) {
+StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbManager), brightness_beta_(0) {
     color_map_["person"] = cv::Scalar(0, 255, 0);
     color_map_["helmet"] = cv::Scalar(255, 178, 51);
     color_map_["safety-vest"] = cv::Scalar(0, 128, 255);
@@ -37,6 +37,15 @@ StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbMan
         std::cout << "이상탐지 시스템 초기화 완료" << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "이상탐지 시스템 초기화 실패: " << e.what() << std::endl;
+        anomaly_detector_ = nullptr;
+    }
+
+    try {
+        led_fade_controller_ = std::make_unique<DebouncedFadeController>(LedController::instance(), 3000);
+        std::cout << "[INFO] LED controller initialized successfully." << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[WARN] LED controller disabled: " << e.what() << std::endl;
+        led_fade_controller_ = nullptr; 
     }
 }
 
@@ -165,7 +174,9 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
 
             // 음성 안내
         if (is_unsafe) {
-            led_fade_controller_.triggerFade();
+            if (led_fade_controller_) {
+                led_fade_controller_->triggerFade();
+            }
             if (!audio_notifier_.isPlaying()) {
                 bool only_helmet_missing = (helmet_count < person_count) && (vest_count >= person_count);
                 bool only_vest_missing = (vest_count < person_count) && (helmet_count >= person_count);
@@ -245,7 +256,9 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
         bool trespass_detected = (person_count > 0);
 
         if(trespass_detected) {
-            led_fade_controller_.triggerFade();
+            if (led_fade_controller_) {
+                led_fade_controller_->triggerFade();
+            }
 
             if(serial_comm_ && serial_comm_->isOpen()) {
                 uint8_t seq = serial_comm_->getNextSeq();
@@ -311,7 +324,9 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
     
         // 3. 넘어짐 발생 시 음성 안내 및 STM32 신호 전송
         if (fall_detected) {
-            led_fade_controller_.triggerFade();
+            if (led_fade_controller_) {
+                led_fade_controller_->triggerFade();
+            }
 
             if (!audio_notifier_.isPlaying()) {
                 audio_notifier_.play("sounds/fall_ment.wav");

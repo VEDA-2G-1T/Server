@@ -108,5 +108,5 @@ private:
     // PPE detect시 스피커 송출 관련 멤버 변수
     AudioNotifier audio_notifier_; 
 
-    DebouncedFadeController led_fade_controller_;
+    std::unique_ptr<DebouncedFadeController> led_fade_controller_;
 };
