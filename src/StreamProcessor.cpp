@@ -111,6 +111,11 @@ void StreamProcessor::handle_anomaly_detection() {
 
             // [핵심] 이전에 정상이였다가(false) 지금 이상이 감지된(true) 첫 순간에만 실행
             if (current_anomaly && !anomaly_detected_.load()) {
+
+                // 등록된 콜백이 있으면 호출 
+                if (anomaly_callback_) {
+                anomaly_callback_(current_anomaly);
+                }
                 
                 std::cout << "🚨 이상탐지! 알람을 1회 울립니다." << std::endl;
 
