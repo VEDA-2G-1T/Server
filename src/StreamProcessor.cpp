@@ -111,18 +111,14 @@ void StreamProcessor::handle_anomaly_detection() {
 
             // [핵심] 이전에 정상이였다가(false) 지금 이상이 감지된(true) 첫 순간에만 실행
             if (current_anomaly && !anomaly_detected_.load()) {
-
-                if (anomaly_callback_) {
-                anomaly_callback_(current_anomaly);
-                }
-
+                
                 std::cout << "🚨 이상탐지! 알람을 1회 울립니다." << std::endl;
 
                 if (serial_comm_ && serial_comm_->isOpen()) {
                     // --- 1. 알람을 켜기 위해 첫 번째 TOGGLE 신호 전송 ---
                     uint8_t seq1 = serial_comm_->getNextSeq();
                     auto frame_on = STM32Protocol::buildToggleFrame(seq1);
-                    serial_comm_->send(frame_on);
+                    serial_comm_->sendAndReceive(frame_on, "Sent TOGGLE (ON)");
                 }
             }
 
@@ -388,13 +384,13 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
             last_save_time_ = time(0);
         }
     } else if (active_mode == "stop") {
-        //cv::putText(processed_frame, "STOPPED", cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+        cv::putText(processed_frame, "STOPPED", cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
     }
     // "raw" 모드일 경우, 위 if-else 문을 모두 건너뛰고 필터만 적용된 processed_frame이 남게 됩니다.
 
     // 5. 최종 프레임에 공통 상태 정보를 그리고 스트리밍합니다.
     if (!processed_frame.empty()) {
-        //cv::putText(processed_frame, "MODE: " + active_mode, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
+        cv::putText(processed_frame, "MODE: " + active_mode, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
 
         if (proc_processed_) {
             fwrite(processed_frame.data, 1, processed_frame.total() * processed_frame.elemSize(), proc_processed_);
