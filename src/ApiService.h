@@ -25,6 +25,7 @@ public:
     void broadcastNewBlur(const PersonCountData& data);
     void broadcastNewFall(const FallCountData& data);
     void broadcastNewTrespass(const TrespassLogData& data);
+    void broadcastSystemInfo(double cpuUsage, double memoryUsage);
     void handleSTM32StatusCheck();
 
 private:

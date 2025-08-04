@@ -23,7 +23,9 @@ Detector::Detector(const std::string& model_path, const cv::Size& input_size)
     if (!interpreter) {
         std::cerr << "인터프리터 생성 실패" << std::endl;
         exit(1);
-    }
+    }   
+
+
     TfLiteXNNPackDelegateOptions xnnpack_options = TfLiteXNNPackDelegateOptionsDefault();
     xnnpack_options.num_threads = 4;
     xnnpack_delegate.reset(TfLiteXNNPackDelegateCreate(&xnnpack_options));
@@ -38,6 +40,9 @@ Detector::Detector(const std::string& model_path, const cv::Size& input_size)
     in_c = in_dims->data[3];
     input_scale = interpreter->tensor(input_idx)->params.scale;
     input_zero_point = interpreter->tensor(input_idx)->params.zero_point;
+
+
+
     output_idx = interpreter->outputs()[0];
     TfLiteIntArray* out_dims = interpreter->tensor(output_idx)->dims;
     out_num_attr = out_dims->data[1];

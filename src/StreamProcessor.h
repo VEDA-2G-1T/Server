@@ -42,6 +42,7 @@ public:
     void onNewBlur(std::function<void(const PersonCountData&)> callback);
     void onNewFall(std::function<void(const FallCountData&)> callback);
     void onNewTrespass(std::function<void(const TrespassLogData&)> callback);
+    void onSystemInfoUpdate(std::function<void(double, double)> callback);
 
     void setBrightness(int beta);
 
@@ -53,6 +54,7 @@ private:
     void process_frame_and_stream(cv::Mat& frame);
     void handle_mode_change();
     void handle_anomaly_detection();  // 이상탐지 처리 함수 추가
+    void handle_system_info_monitoring(); // 시스템 정보 모니터링 처리 함수 추가
 
     // 그리기 및 스트리밍
     void draw_and_stream_output(cv::Mat& frame, const std::vector<DetectionResult>& results);
@@ -60,6 +62,8 @@ private:
     // 헬퍼 함수
     FILE* create_ffmpeg_process(const std::string& rtsp_url);
     std::string gstreamer_pipeline();
+    double get_cpu_usage(); // CPU 사용률 계산
+    double get_memory_usage(); // 메모리 사용률 계산
 
     // --- 멤버 변수 ---
     DatabaseManager& db_manager_;
@@ -67,9 +71,9 @@ private:
     std::unique_ptr<AnomalyDetector> anomaly_detector_;  // 이상탐지 객체 추가
 
     // 카메라 및 스트림 설정
-    const int camera_id_ = 1;
-    int capture_width_ = 320;
-    int capture_height_ = 240;
+    const int camera_id_ = 4;
+    int capture_width_ = 640;
+    int capture_height_ = 480;
     int framerate_ = 30;
     cv::VideoCapture cap_;
     FILE* proc_processed_ = nullptr;
@@ -104,6 +108,7 @@ private:
     std::function<void(const PersonCountData&)> blur_callback_;
     std::function<void(const FallCountData&)> fall_callback_;
     std::function<void(const TrespassLogData&)> trespass_callback_;
+    std::function<void(double, double)> system_info_callback_;
 
     // PPE detect시 스피커 송출 관련 멤버 변수
     AudioNotifier audio_notifier_; 

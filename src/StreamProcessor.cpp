@@ -14,6 +14,8 @@
 #include <iomanip>
 #include <sstream>
 #include <termios.h>
+#include <fstream>
+#include <sys/sysinfo.h>
 
 // 생성자
 StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbManager), brightness_beta_(0) {
@@ -89,6 +91,9 @@ void StreamProcessor::run() {
         
         // 이상탐지 처리
         handle_anomaly_detection();
+        
+        // 시스템 정보 모니터링 처리
+        handle_system_info_monitoring();
     }
 }
 
@@ -98,6 +103,7 @@ void StreamProcessor::onNewDetection(std::function<void(const DetectionData&)> c
 void StreamProcessor::onNewBlur(std::function<void(const PersonCountData&)> callback) { blur_callback_ = callback; }
 void StreamProcessor::onNewFall(std::function<void(const FallCountData&)> callback) { fall_callback_ = callback; }
 void StreamProcessor::onNewTrespass(std::function<void(const TrespassLogData&)> callback) { trespass_callback_ = callback; }
+void StreamProcessor::onSystemInfoUpdate(std::function<void(double, double)> callback) { system_info_callback_ = callback; }
 
 
 void StreamProcessor::handle_anomaly_detection() {
@@ -126,6 +132,90 @@ void StreamProcessor::handle_anomaly_detection() {
             anomaly_detected_ = current_anomaly;
         }
     }
+}
+
+void StreamProcessor::handle_system_info_monitoring() {
+    static time_t last_system_info_check = 0;
+    constexpr static int SYSTEM_INFO_CHECK_INTERVAL = 1; // 5초마다 체크
+    
+    time_t current_time = time(0);
+    if (current_time - last_system_info_check >= SYSTEM_INFO_CHECK_INTERVAL) {
+        last_system_info_check = current_time;
+        
+        if (system_info_callback_) {
+            // CPU 사용률 계산
+            double cpu_usage = get_cpu_usage();
+            double memory_usage = get_memory_usage();
+            
+            // 콜백 호출
+            system_info_callback_(cpu_usage, memory_usage);
+        }
+    }
+}
+
+double StreamProcessor::get_cpu_usage() {
+    static struct {
+        long long user, nice, system, idle, iowait, irq, softirq;
+        bool first_run = true;
+    } cpu_stats;
+    
+    std::ifstream file("/proc/stat");
+    std::string line;
+    
+    if (std::getline(file, line)) {
+        std::istringstream iss(line);
+        std::string cpu;
+        long long user, nice, system, idle, iowait, irq, softirq;
+        
+        iss >> cpu >> user >> nice >> system >> idle >> iowait >> irq >> softirq;
+        
+        if (cpu_stats.first_run) {
+            cpu_stats.user = user;
+            cpu_stats.nice = nice;
+            cpu_stats.system = system;
+            cpu_stats.idle = idle;
+            cpu_stats.iowait = iowait;
+            cpu_stats.irq = irq;
+            cpu_stats.softirq = softirq;
+            cpu_stats.first_run = false;
+            return 0.0;
+        }
+        
+        long long total_diff = (user + nice + system + idle + iowait + irq + softirq) - 
+                              (cpu_stats.user + cpu_stats.nice + cpu_stats.system + 
+                               cpu_stats.idle + cpu_stats.iowait + cpu_stats.irq + cpu_stats.softirq);
+        
+        long long active_diff = (user + nice + system + irq + softirq) - 
+                               (cpu_stats.user + cpu_stats.nice + cpu_stats.system + 
+                                cpu_stats.irq + cpu_stats.softirq);
+        
+        cpu_stats.user = user;
+        cpu_stats.nice = nice;
+        cpu_stats.system = system;
+        cpu_stats.idle = idle;
+        cpu_stats.iowait = iowait;
+        cpu_stats.irq = irq;
+        cpu_stats.softirq = softirq;
+        
+        if (total_diff > 0) {
+            return (static_cast<double>(active_diff) / total_diff) * 100.0;
+        }
+    }
+    
+    return 0.0;
+}
+
+double StreamProcessor::get_memory_usage() {
+    struct sysinfo info;
+    if (sysinfo(&info) != 0) {
+        return -1.0;
+    }
+    
+    unsigned long total_ram = info.totalram * info.mem_unit;
+    unsigned long free_ram = info.freeram * info.mem_unit;
+    unsigned long used_ram = total_ram - free_ram;
+    
+    return (static_cast<double>(used_ram) / total_ram) * 100.0;
 }
 
 void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
@@ -390,7 +480,7 @@ void StreamProcessor::process_frame_and_stream(cv::Mat& original_frame) {
 
     // 5. 최종 프레임에 공통 상태 정보를 그리고 스트리밍합니다.
     if (!processed_frame.empty()) {
-        cv::putText(processed_frame, "MODE: " + active_mode, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
+        // cv::putText(processed_frame, "MODE: " + active_mode, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
 
         if (proc_processed_) {
             fwrite(processed_frame.data, 1, processed_frame.total() * processed_frame.elemSize(), proc_processed_);

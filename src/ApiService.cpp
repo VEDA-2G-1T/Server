@@ -6,6 +6,86 @@
 #include "StreamProcessor.h" 
 #include "SerialCommunicator.h" 
 #include "STM32Protocol.h"     
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <sys/sysinfo.h>
+
+// CPU 모니터링 클래스
+class SystemMonitor {
+private:
+    struct CpuTimes {
+        long long user, nice, system, idle, iowait, irq, softirq;
+        
+        long long getTotal() const {
+            return user + nice + system + idle + iowait + irq + softirq;
+        }
+        
+        long long getActive() const {
+            return user + nice + system + irq + softirq;
+        }
+    };
+    
+    CpuTimes previousCpu;
+    bool firstRun = true;
+
+public:
+    // CPU 평균 사용률 계산 (전체 코어 평균)
+    double getCpuUsage() {
+        CpuTimes currentCpu = readCpuTimes();
+        
+        if (firstRun) {
+            previousCpu = currentCpu;
+            firstRun = false;
+            return 0.0; // 첫 번째 실행에서는 0 반환
+        }
+        
+        long long totalDiff = currentCpu.getTotal() - previousCpu.getTotal();
+        long long activeDiff = currentCpu.getActive() - previousCpu.getActive();
+        
+        double cpuPercent = 0.0;
+        if (totalDiff > 0) {
+            cpuPercent = (static_cast<double>(activeDiff) / totalDiff) * 100.0;
+        }
+        
+        previousCpu = currentCpu;
+        return cpuPercent;
+    }
+    
+    // 메모리 사용률 계산
+    double getMemoryUsage() {
+        struct sysinfo info;
+        if (sysinfo(&info) != 0) {
+            return -1.0;
+        }
+        
+        unsigned long totalRam = info.totalram * info.mem_unit;
+        unsigned long freeRam = info.freeram * info.mem_unit;
+        unsigned long usedRam = totalRam - freeRam;
+        
+        return (static_cast<double>(usedRam) / totalRam) * 100.0;
+    }
+
+private:
+    // /proc/stat에서 전체 CPU 시간 읽기 (첫 번째 줄 = 전체 평균)
+    CpuTimes readCpuTimes() {
+        std::ifstream file("/proc/stat");
+        std::string line;
+        CpuTimes times = {0, 0, 0, 0, 0, 0, 0};
+        
+        if (std::getline(file, line)) {
+            std::istringstream iss(line);
+            std::string cpu;
+            iss >> cpu >> times.user >> times.nice >> times.system 
+                >> times.idle >> times.iowait >> times.irq >> times.softirq;
+        }
+        
+        return times;
+    }
+};
+
+// 전역 시스템 모니터 인스턴스
+static SystemMonitor systemMonitor;
 
 ApiService::ApiService(crow::SimpleApp& app, StreamProcessor& processor, DatabaseManager& dbManager, SerialCommunicator& serial_comm)
     : app_(app), processor_(processor), dbManager_(dbManager), serial_comm_(serial_comm) {}
@@ -269,5 +349,23 @@ void ApiService::handleSTM32StatusCheck() {
                 user->send_text(msg.dump());
             }
         }
+    }
+}
+
+void ApiService::broadcastSystemInfo(double cpuUsage, double memoryUsage) {
+    nlohmann::json msg;
+    msg["type"] = "system_info"; // 메시지 종류 식별자
+    msg["data"]["cpu_usage"] = cpuUsage;
+    msg["data"]["memory_usage"] = memoryUsage;
+    
+    // 현재 시간 추가
+    time_t now = time(0);
+    char buf[80];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    msg["data"]["timestamp"] = std::string(buf);
+
+    std::lock_guard<std::mutex> _(mtx_);
+    for (auto user : ws_users_) {
+        user->send_text(msg.dump());
     }
 }
