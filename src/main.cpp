@@ -55,6 +55,10 @@ int main() {
         apiService.broadcastNewTrespass(data);
     });
 
+    streamProcessor.onSystemInfoUpdate([&apiService](double cpuUsage, double memoryUsage) {
+        apiService.broadcastSystemInfo(cpuUsage, memoryUsage);
+    });
+
     // 3. API 서버를 백그라운드 스레드에서 실행
     std::thread server_thread([&app](){
         std::cout << "C++ 백엔드 서버가 8443번 포트에서 시작됩니다..." << std::endl;
