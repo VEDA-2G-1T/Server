@@ -9,6 +9,7 @@
 #include <functional>
 #include <mutex>
 #include "AudioNotifier.h"
+#include "SystemMonitor.h"
 #include "driver/led_pwm/led_controller/led_fade_manager.h"
 
 // 클래스 전방 선언 (순환 참조 방지)
@@ -69,6 +70,7 @@ private:
     DatabaseManager& db_manager_;
     std::unique_ptr<SerialCommunicator> serial_comm_;
     std::unique_ptr<AnomalyDetector> anomaly_detector_;  // 이상탐지 객체 추가
+    std::unique_ptr<SystemMonitor> system_monitor_; // 멤버 변수 추가
 
     // 카메라 및 스트림 설정
     const int camera_id_ = 1;

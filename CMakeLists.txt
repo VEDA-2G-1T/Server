@@ -48,6 +48,7 @@ set(SOURCES
     src/AnomalyDetector.cpp
     src/AudioNotifier.cpp
     src/fall.cpp
+    src/SystemMonitor.cpp
     src/driver/led_pwm/led_controller/led_pwm_controller.cpp
     src/driver/led_pwm/led_controller/led_fade_manager.cpp
     src/driver/mic/mic_cotroller/mic_controller.cpp

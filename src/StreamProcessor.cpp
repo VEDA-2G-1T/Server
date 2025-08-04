@@ -26,6 +26,7 @@ StreamProcessor::StreamProcessor(DatabaseManager& dbManager) : db_manager_(dbMan
     color_map_["fall"] = cv::Scalar(0, 0, 255); 
     color_map_["stand"] = cv::Scalar(255, 0, 0); 
 
+    system_monitor_ = std::make_unique<SystemMonitor>();
     // 시리얼 통신 객체 생성
     serial_comm_ = std::make_unique<SerialCommunicator>("/dev/ttyACM0", B115200);
     if (!serial_comm_->isOpen()) {
@@ -147,12 +148,10 @@ void StreamProcessor::handle_system_info_monitoring() {
     if (current_time - last_system_info_check >= SYSTEM_INFO_CHECK_INTERVAL) {
         last_system_info_check = current_time;
 
-        if (system_info_callback_) {
-            // CPU 사용률 계산
-            double cpu_usage = get_cpu_usage();
-            double memory_usage = get_memory_usage();
-
-            // 콜백 호출
+        if (system_info_callback_ && system_monitor_) { // system_monitor_가 유효한지 확인
+            // CPU 및 메모리 사용률을 멤버 객체를 통해 계산
+            double cpu_usage = system_monitor_->getCpuUsage();
+            double memory_usage = system_monitor_->getMemoryUsage();
             system_info_callback_(cpu_usage, memory_usage);
         }
     }
