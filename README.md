@@ -40,7 +40,9 @@
 
 ## 🏗️ 서버 시스템 아키텍처 
 
-<img src="https://github.com/user-attachments/assets/e4fe2159-ff17-4fe8-88a9-2cd906cac17d" alt="프로젝트 구조" width="80%">
+<a href="https://github.com/user-attachments/assets/e4fe2159-ff17-4fe8-88a9-2cd906cac17d">
+  <img src="https://github.com/user-attachments/assets/e4fe2159-ff17-4fe8-88a9-2cd906cac17d" alt="프로젝트 구조" width="80%">
+</a>
 
 ---
 ## 🛠️ 설치 및 설정 가이드
